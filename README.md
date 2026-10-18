@@ -31,4 +31,4 @@ Data is in-memory dummy data; it resets on every restart.
 - `helmet` security headers
 
 ## Deployment
-Frontend → Vercel, backend → Render. See [SETUP.md](SETUP.md).
+Frontend → Vercel, backend → Railway. See [SETUP.md](SETUP.md).
