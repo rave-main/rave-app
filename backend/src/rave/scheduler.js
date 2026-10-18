@@ -5,6 +5,7 @@ const TICK_MS = 30 * 1000;
 const BACKOFF_BASE_MS = 5 * 60 * 1000;
 const BACKOFF_CAP_MS = 60 * 60 * 1000;
 const ABANDONED_AFTER_MIN = 30;
+const CONTINUE_AFTER_MS = 5 * 60 * 1000; // a run that stopped at its time limit continues this long afterwards
 
 const pad = (n) => String(n).padStart(2, '0');
 const every = (minutes, offset = 0) => {
@@ -46,7 +47,8 @@ async function isDue(pool, job, now = new Date()) {
   const mark = lastScheduledAt(job.times, now);
   if (!mark) return { due: false, reason: 'no schedule' };
   const { rows: [r] } = await pool.query(
-    `SELECT count(*) FILTER (WHERE status = 'success' AND started_at >= $2::timestamptz)::int AS ok_since,
+    `SELECT count(*) FILTER (WHERE status = 'success' AND started_at >= $2::timestamptz AND coalesce(details->>'partial', 'false') <> 'true')::int AS ok_since,
+            max(finished_at) FILTER (WHERE status = 'success' AND started_at >= $2::timestamptz AND details->>'partial' = 'true') AS last_partial,
             count(*) FILTER (WHERE status = 'failed' AND started_at >= $2::timestamptz)::int AS failed_since,
             max(started_at) FILTER (WHERE status = 'failed' AND started_at >= $2::timestamptz) AS last_failed,
             count(*) FILTER (WHERE status = 'running' AND started_at > $3::timestamptz - interval '${ABANDONED_AFTER_MIN} minutes')::int AS running
@@ -55,6 +57,7 @@ async function isDue(pool, job, now = new Date()) {
   );
   if (r.ok_since > 0) return { due: false, reason: 'already ran for this schedule', mark };
   if (r.running > 0) return { due: false, reason: 'running', mark };
+  if (r.last_partial && now.getTime() - new Date(r.last_partial).getTime() < CONTINUE_AFTER_MS) return { due: false, reason: 'continuing shortly (the last run stopped at its time limit)', mark };
   if (r.last_failed) {
     const wait = Math.min(BACKOFF_CAP_MS, BACKOFF_BASE_MS * 2 ** (r.failed_since - 1));
     if (now.getTime() - new Date(r.last_failed).getTime() < wait) return { due: false, reason: 'backing off after a failure', mark };

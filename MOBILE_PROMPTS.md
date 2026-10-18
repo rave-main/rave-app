@@ -22,3 +22,11 @@ Copy-paste prompts for continuing work on rave-app from the Claude app on your p
 ## Security review
 > Run a security review of rave-main/rave-app's backend: authentication and sessions, CORS, rate limiting,
 > input validation, payload limits, headers. List issues by severity and fix anything high.
+
+## RAVE: is the data healthy?
+> Read docs/HANDOVER.md in rave-main/rave-app, then check the Data page endpoints (`/api/rave/sources`, `/integrity`,
+> `/status`) on the production site and tell me in plain English whether every source is up to date and the database size.
+
+## RAVE: change the site
+> Read docs/HANDOVER.md first. Keep wording simple and in British English, with units on every number and chart. Run the tests,
+> push to a branch and give me the Vercel preview URL.

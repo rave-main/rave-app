@@ -121,15 +121,21 @@ function confidenceOf(coverage) {
   return coverage >= 1 ? 'high' : coverage >= 0.5 ? 'medium' : 'low';
 }
 
+// How far from normal, in words (z is the number of typical ups and downs away from the usual level)
+function unusualWords(z) {
+  const a = Math.abs(z);
+  return a < 1 ? 'within its normal ups and downs' : a < 2 ? 'a little unusual' : a < 3.5 ? 'unusual' : 'very unusual';
+}
+
 function describe({ horizon, window, baselineText, view, label, latest, rankText, noun = 'mentions' }) {
   const { raw, adjusted, market } = view;
   const parts = [
-    `${latest.ticker ? `${latest.ticker}: ` : ''}${x(raw.ratio)} normal over ${window} (${fmt(raw.current)} ${noun} vs a typical ${fmt(raw.baselineMedian)}, based on ${baselineText}).`,
-    `That is ${fmt(Math.abs(raw.z))} robust standard deviations ${raw.z >= 0 ? 'above' : 'below'} normal.`,
+    `${latest.ticker ? `${latest.ticker}: ` : ''}${x(raw.ratio)} its normal level over ${window} (${fmt(raw.current)} ${noun} against a usual ${fmt(raw.baselineMedian)}, based on ${baselineText}).`,
+    `That is ${unusualWords(raw.z)}${Math.abs(raw.z) < 1 ? '' : raw.z >= 0 ? ', on the high side' : ', on the low side'}.`,
   ];
   if (adjusted && market) {
     parts.push(
-      `Overall Reddit stock chatter is ${x(market.ratio)} normal, so adjusted for that it is ${x(adjusted.ratio)} normal (z ${fmt(adjusted.z)}).`
+      `Reddit as a whole is ${x(market.ratio)} its normal level, so allowing for that, this stock is ${x(adjusted.ratio)} its normal level (${unusualWords(adjusted.z)}).`
     );
   }
   if (label === 'Low volume') {

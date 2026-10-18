@@ -25,7 +25,6 @@ function probes(extra = []) {
     ['wikipedia-api', 'https://en.wikipedia.org/w/api.php?action=query&format=json&formatversion=2&redirects=1&titles=GameStop', (b) => ({ ok: Array.isArray(b?.query?.pages), detail: `resolved to ${b?.query?.pages?.[0]?.title}` })],
     ['wikimedia-pageviews', `https://wikimedia.org/api/rest_v1/metrics/pageviews/per-article/en.wikipedia/all-access/user/GameStop/daily/${day(-5)}00/${day(-2)}00`, (b, t, s) => ({ ok: Array.isArray(b?.items) || s === 404, detail: s === 404 ? 'reachable (no data for that range)' : `${b.items.length} days returned, latest ${b.items[b.items.length - 1]?.views} views` })],
     ['yahoo-prices', `https://query1.finance.yahoo.com/v8/finance/chart/GME?interval=1d&range=5d`, (b) => ({ ok: Array.isArray(b?.chart?.result?.[0]?.timestamp), detail: b?.chart?.error ? `${b.chart.error.description}` : `${b?.chart?.result?.[0]?.timestamp?.length ?? 0} daily bars for GME` }), { headers: { 'User-Agent': BROWSER_UA } }],
-    ['stooq-prices', 'https://stooq.com/q/d/l/?s=gme.us&i=d', (b, t) => ({ ok: t.startsWith('Date,'), detail: t.startsWith('Date,') ? `${t.trim().split('\n').length - 1} daily rows for GME` : t.trim().slice(0, 80) }), { headers: { 'User-Agent': BROWSER_UA, Accept: 'text/csv,*/*' } }],
     ...extra,
   ];
 }

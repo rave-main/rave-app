@@ -4,6 +4,8 @@
 const BASE_URL = process.env.APEWISDOM_BASE_URL || 'https://apewisdom.io/api/v1.0';
 const USER_AGENT = 'RAVE-research/1.0 (+https://github.com/rave-main/rave-app)';
 
+const { displayName } = require('./text');
+
 class ShapeError extends Error {}
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -28,7 +30,7 @@ function parsePage(body) {
     }
     return {
       ticker,
-      name: typeof r.name === 'string' ? r.name : null,
+      name: typeof r.name === 'string' ? displayName(r.name) : null,
       rank,
       mentions,
       upvotes: toInt(r.upvotes),
@@ -67,7 +69,7 @@ async function getJson(url, { fetchImpl, retries, timeoutMs, retryDelayMs }) {
 }
 
 // Fetches every page of the leaderboard. A page that cannot be fetched fails the whole call: a partial
-// leaderboard would make watchlist stocks look "not ranked" and corrupt the history.
+// leaderboard would make stocks look "not ranked" and corrupt the history.
 async function fetchLeaderboard({
   filter = 'all-stocks',
   maxPages = 15,

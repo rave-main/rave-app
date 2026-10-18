@@ -1,18 +1,16 @@
-// Daily price data (open, high, low, close, volume) for the tracked stocks, from free sources:
-// Yahoo Finance's chart endpoint first (adjusted for splits), Stooq as a fallback (unadjusted CSV).
-// Both are unofficial and free, so every call is polite (spaced, retried with backoff) and failures are visible.
+// Daily price data (open, high, low, close, volume) in US dollars from Yahoo Finance's chart endpoint (adjusted for splits).
+// It is unofficial and free, so every call is polite (spaced, retried with backoff) and failures are visible.
 const BROWSER_UA = 'Mozilla/5.0 (compatible; RAVE-research/1.0; +https://github.com/rave-main/rave-app)';
 const YAHOO = 'https://query1.finance.yahoo.com/v8/finance/chart';
-const STOOQ = 'https://stooq.com/q/d/l/';
 const DAY_MS = 86400000;
-const BACKFILL_DAYS = 5 * 365;
+const BACKFILL_DAYS = 2 * 365; // two years of prices for every stock keeps the database small
 const FULL_REFRESH_DAYS = 7; // splits rewrite history, so the whole series is re-fetched weekly (daily runs only top up)
 
 class PriceError extends Error {}
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const isoDay = (ms) => new Date(ms).toISOString().slice(0, 10);
 
-// ApeWisdom writes class shares with a dot ("BRK.B"); Yahoo and Stooq use a dash
+// ApeWisdom writes class shares with a dot ("BRK.B"); Yahoo uses a dash
 const yahooSymbol = (ticker) => ticker.replace(/\./g, '-').toUpperCase();
 
 async function getText(url, { fetchImpl = fetch, retries = 3, retryDelayMs = 2000, timeoutMs = 25000, headers = {} } = {}) {
@@ -66,44 +64,15 @@ async function fetchYahoo(ticker, fromDay, toDay, opts = {}) {
   return parseYahoo(await getText(url, opts), symbol);
 }
 
-// ---------- Stooq ----------
-function parseStooq(text, symbol) {
-  const t = text.trim();
-  if (!t.startsWith('Date,')) throw new PriceError(`Stooq: ${t.slice(0, 80).replace(/\s+/g, ' ') || 'empty response'} (${symbol})`);
-  const rows = [];
-  for (const line of t.split(/\r?\n/).slice(1)) {
-    const [day, o, h, l, c, v] = line.split(',');
-    const nums = [o, h, l, c].map(Number);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || nums.some((n) => !Number.isFinite(n))) continue;
-    rows.push({ day, open: nums[0], high: nums[1], low: nums[2], close: nums[3], adjClose: nums[3], volume: Number(v) || 0 });
-  }
+// Daily bars for one ticker from Yahoo Finance
+async function fetchPrices(ticker, fromDay, toDay, opts = {}) {
+  const rows = await fetchYahoo(ticker, fromDay, toDay, opts);
+  if (!rows.length) throw new PriceError(`Yahoo: no rows for ${ticker}`);
   return rows;
 }
 
-async function fetchStooq(ticker, fromDay, toDay, opts = {}) {
-  const symbol = `${yahooSymbol(ticker).toLowerCase()}.us`;
-  const url = `${STOOQ}?s=${encodeURIComponent(symbol)}&i=d&d1=${fromDay.replace(/-/g, '')}&d2=${toDay.replace(/-/g, '')}`;
-  return parseStooq(await getText(url, opts), symbol);
-}
-
-// Yahoo first, Stooq if Yahoo fails. Returns { rows, source }.
-async function fetchPrices(ticker, fromDay, toDay, opts = {}) {
-  const sources = opts.sources || [['yahoo', fetchYahoo], ['stooq', fetchStooq]];
-  const errors = [];
-  for (const [source, fn] of sources) {
-    try {
-      const rows = await fn(ticker, fromDay, toDay, opts);
-      if (rows.length || source === sources[sources.length - 1][0]) return { rows, source };
-      errors.push(`${source}: no rows`);
-    } catch (err) {
-      errors.push(`${source}: ${String(err.message).slice(0, 100)}`);
-    }
-  }
-  throw new PriceError(errors.join(' | '));
-}
-
 // ---------- storage ----------
-async function savePrices(pool, ticker, rows, source) {
+async function savePrices(pool, ticker, rows, source = 'yahoo') {
   if (!rows.length) return 0;
   await pool.query(
     `INSERT INTO prices (ticker, day, open, high, low, close, adj_close, volume, source)
@@ -127,4 +96,4 @@ async function loadPrices(pool, tickers, { fromDay = '1900-01-01' } = {}) {
   return out;
 }
 
-module.exports = { fetchPrices, fetchYahoo, fetchStooq, parseYahoo, parseStooq, savePrices, loadPrices, yahooSymbol, getText, PriceError, BACKFILL_DAYS, FULL_REFRESH_DAYS, DAY_MS, isoDay, BROWSER_UA };
+module.exports = { fetchPrices, fetchYahoo, parseYahoo, savePrices, loadPrices, yahooSymbol, getText, PriceError, BACKFILL_DAYS, FULL_REFRESH_DAYS, DAY_MS, isoDay, BROWSER_UA };

@@ -8,7 +8,7 @@ let pool;
 before(async () => ({ pool } = await setup()));
 after(() => pool.end());
 
-// A leaderboard of 150 tickers: GME is #3, AAPL #120; the rest of the watchlist is absent
+// A leaderboard of 150 tickers: GME is #3, AAPL #120
 function leaderboard({ drop = [], extra = [], bump = {} } = {}) {
   let rows = Array.from({ length: 150 }, (_, i) => ({
     ticker: `T${i + 1}`, name: `Company ${i + 1}`, rank: i + 1, mentions: 1000 - i * 5, upvotes: 50, rank24hAgo: i + 2, mentions24hAgo: 900 - i * 5,
@@ -55,8 +55,6 @@ test('a run stores EVERY ticker compactly, the market total, names, raw pages an
   assert.equal(await cell('GME', DAY0, 20, 'ranks'), 3);
   assert.equal(await cell('T130', DAY0, 20), 1000 - 129 * 5, 'a ticker far down the leaderboard is stored too');
   assert.equal(await cell('GME', DAY0, 21), null, 'slots with no run stay NULL');
-  assert.equal(await cell('AMC', DAY0, 20), 0, 'a watchlist stock missing from the leaderboard is stored as 0');
-  assert.equal(await cell('AMC', DAY0, 20, 'ranks'), null);
 
   const { rows: [md] } = await pool.query(`SELECT market[21] AS m, tickers[21] AS t FROM market_days WHERE day = '${DAY0}'`);
   assert.equal(md.m, run.market_total_mentions);
@@ -64,9 +62,7 @@ test('a run stores EVERY ticker compactly, the market total, names, raw pages an
 
   const { rows: [gme] } = await pool.query(`SELECT * FROM tickers WHERE ticker = 'GME'`);
   assert.deepEqual([gme.name, gme.ranked, gme.rank, gme.mentions, gme.rank_24h_ago, gme.mentions_24h_ago], ['Company 3', true, 3, 990, 4, 890]);
-  const { rows: [amc] } = await pool.query(`SELECT * FROM tickers WHERE ticker = 'AMC'`);
-  assert.deepEqual([amc.name, amc.ranked, amc.mentions], ['AMC Entertainment', false, 0]);
-  assert.equal((await pool.query('SELECT count(*)::int AS n FROM tickers')).rows[0].n, 150 + 8, 'every ticker plus the watchlist stocks that were absent');
+  assert.equal((await pool.query('SELECT count(*)::int AS n FROM tickers')).rows[0].n, 150, 'every ticker on the leaderboard');
 });
 
 test('later runs fill their own slot; absent tickers become 0; new tickers are back-filled with zeros', async () => {

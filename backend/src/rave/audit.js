@@ -38,24 +38,19 @@ const AUDIT_SQL = `
        WHERE s.run_id = l.id AND s.rank IS NOT NULL AND rr.ticker IS NULL
     ) x
     GROUP BY l.id
-  ), missing AS (
-    SELECT l.id AS run_id, count(*)::int AS n
-    FROM live l CROSS JOIN watchlist w
-    WHERE w.active AND NOT EXISTS (SELECT 1 FROM ticker_days td WHERE td.day = l.day AND td.ticker = w.ticker AND td.mentions[l.slot + 1] IS NOT NULL)
-    GROUP BY l.id
   )
   SELECT r.id, r.started_at AS "startedAt", r.slot, r.legacy, (l.id IS NOT NULL) AS "isLive", r.pages_fetched AS "pagesFetched", r.tickers_seen AS "tickersSeen",
          r.market_total_mentions AS "marketTotal",
          rs.pages AS "rawPages", rs.tickers AS "rawTickers", rs.mentions::int AS "rawMentions",
-         sn.listed AS "storedListed", mk.market AS "storedMarket", coalesce(b.n, 0) AS "mismatchedRows", coalesce(m.n, 0) AS "missingWatchlist"
+         sn.listed AS "storedListed", mk.market AS "storedMarket", coalesce(b.n, 0) AS "mismatchedRows"
   FROM runs r LEFT JOIN live l ON l.id = r.id LEFT JOIN raw_sum rs ON rs.run_id = r.id LEFT JOIN stored_n sn ON sn.run_id = r.id
-       LEFT JOIN mkt mk ON mk.run_id = r.id LEFT JOIN bad b ON b.run_id = r.id LEFT JOIN missing m ON m.run_id = r.id
+       LEFT JOIN mkt mk ON mk.run_id = r.id LEFT JOIN bad b ON b.run_id = r.id
   ORDER BY r.started_at DESC`;
 
 async function auditRuns(pool, { runs = 48 } = {}) {
   const { rows: all } = await pool.query(AUDIT_SQL, [runs]);
   // A run overwritten by a later one in the same half hour is superseded, not an error. Runs from before the storage
-  // migration kept only the watchlist and the top 100 in the old layout, so they cannot be re-derived in full.
+  // migration kept only about 100 stocks in the old layout, so they cannot be re-derived in full.
   const legacy = all.filter((r) => r.legacy).length;
   const rows = all.filter((r) => r.isLive && !r.legacy);
   const withRaw = rows.filter((r) => r.rawPages !== null);
@@ -65,10 +60,6 @@ async function auditRuns(pool, { runs = 48 } = {}) {
     {
       id: 'rows-saved', label: 'Every run stored every ticker it reported',
       problems: failures((r) => r.storedListed !== r.tickersSeen, (r) => `${r.storedListed} tickers stored, ${r.tickersSeen} reported`),
-    },
-    {
-      id: 'watchlist-complete', label: 'Every watchlist stock has a reading in every run',
-      problems: failures((r) => r.missingWatchlist > 0, (r) => `${r.missingWatchlist} watchlist stock(s) missing`),
     },
     {
       id: 'raw-pages', label: 'Raw responses cover every page fetched',
@@ -104,7 +95,7 @@ async function auditRuns(pool, { runs = 48 } = {}) {
     checks,
     cadence: { expectedMinutes: 30, gapsOver45Min: gaps.length, longestGapMinutes: gaps.length ? Math.max(...gaps.map((g) => g.minutes)) : null, gaps: gaps.slice(-10) },
     note: [
-      legacy ? `${legacy} early run(s) were stored in the earlier layout (watchlist and top 100 only) and are not re-checked.` : null,
+      legacy ? `${legacy} early run(s) were stored in an earlier layout (only about 100 stocks) and are not re-checked.` : null,
       withRaw.length < rows.length ? `${rows.length - withRaw.length} older run(s) no longer have raw responses (kept for 7 days), so only the stored totals were checked for them.` : null,
     ].filter(Boolean).join(' ') || null,
   };

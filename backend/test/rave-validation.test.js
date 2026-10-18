@@ -70,7 +70,7 @@ test('a volatility effect (moves 2.5x larger for 5 days after a spike) is detect
   assert.ok(r.direction.p > 0.01, `direction p ${r.direction.p}`);
   const vd = v.verdict(s);
   assert.equal(vd.level, 'size');
-  assert.match(vd.headline, /larger price moves.*but not in a consistent direction/);
+  assert.match(vd.headline, /further than usual.*not in a consistent direction/);
 });
 
 test('volatility clustering with attention that FOLLOWS price: the plain test is fooled, the volatility-matched test is not', async () => {
@@ -83,7 +83,7 @@ test('volatility clustering with attention that FOLLOWS price: the plain test is
     const vd = v.verdict(s);
     assert.equal(vd.level, 'marker', `seed ${seed}: ${vd.headline}`);
     assert.match(vd.headline, /already moving a lot/);
-    assert.match(vd.details.join(' '), /% of the plain difference remains/);
+    assert.match(vd.details.join(' '), /% of the difference above/);
   }
 });
 
@@ -127,8 +127,8 @@ test('verdict handles too few events and reports numbers in plain language', () 
   const cell = (mean, p, eventMean, controlMean) => ({ n: 120, mean, p, ci: [mean - 0.01, mean + 0.01], eventMean, controlMean, hitRate: 0.5, controlHitRate: 0.5 });
   const flat = v.verdict({ lagDays: 2, results: { 5: { size: cell(0.001, 0.4, 0.02, 0.019), direction: cell(0.0005, 0.6, 0.001, 0.0005) } } });
   assert.equal(flat.level, 'none');
-  assert.match(flat.headline, /No evidence/);
-  assert.match(flat.details[0], /2\.00% after a spike vs 1\.90% on ordinary days/);
+  assert.match(flat.headline, /No sign that these spikes/);
+  assert.match(flat.details[0], /2\.0% on average .* after a spike, against 1\.9% on ordinary days/);
   const both = v.verdict({ lagDays: 2, results: { 5: { size: cell(0.01, 0.001, 0.03, 0.02), direction: cell(0.01, 0.002, 0.01, 0) } } });
   assert.equal(both.level, 'both');
 });

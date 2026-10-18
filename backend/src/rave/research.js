@@ -8,7 +8,7 @@
 const v = require('./validation');
 const { loadWikiSeries } = require('./wiki');
 const { loadPrices } = require('./prices');
-const { scoredStocks } = require('./tracked');
+const { scoredStocks, listStocks } = require('./tracked');
 const { median } = require('./stats');
 
 const BENCHMARK = 'SPY';
@@ -21,11 +21,12 @@ const dayOf = (ms) => new Date(ms).toISOString().slice(0, 10);
 
 // ---------- 1. backtest ----------
 async function loadBacktestData(pool) {
+  const mains = (await listStocks(pool)).map((s) => s.ticker); // one ticker per company
   const { rows: mapped } = await pool.query(
-    `SELECT p.ticker, p.article, coalesce(t.mentions, 0) AS mentions, (w.ticker IS NOT NULL) AS watch
-     FROM wiki_pages p LEFT JOIN tickers t ON t.ticker = p.ticker LEFT JOIN watchlist w ON w.ticker = p.ticker
-     WHERE p.article IS NOT NULL AND p.ticker <> $1 ORDER BY (w.ticker IS NULL), t.mentions DESC NULLS LAST, p.ticker`,
-    [BENCHMARK]
+    `SELECT p.ticker, p.article, coalesce(t.mentions, 0) AS mentions
+     FROM wiki_pages p LEFT JOIN tickers t ON t.ticker = p.ticker
+     WHERE p.article IS NOT NULL AND p.ticker <> $1 AND p.ticker = ANY($2) ORDER BY t.mentions DESC NULLS LAST, p.ticker`,
+    [BENCHMARK, mains]
   );
   // two tickers that share an article (GOOG/GOOGL) are one attention series: count it once
   const seen = new Set();
@@ -49,10 +50,10 @@ async function loadBacktestData(pool) {
 }
 
 const CAVEATS = [
-  'The stocks tested are those tracked today, chosen because people are talking about them now. That favours stocks that did something, so treat positive results with extra caution.',
-  'Page views for a day are only complete after that day, so the realistic entry is the open of the first trading day at least 2 calendar days after the spike (an optimistic 1-day case is shown too).',
-  'Returns are market-adjusted (minus SPY over the same window), measured from the entry open to the close of the 1st, 5th and 20th trading day. No trading costs are included.',
-  'Wikipedia page views are a different signal from Reddit mentions; Reddit has no history yet and is tested forward, in the ledger.',
+  'We only test shares that are popular today. Popular shares are more likely to be ones that already did something, so good-looking results deserve extra caution.',
+  'Wikipedia only publishes a day\'s page views after the day ends, so the realistic purchase is at the market open at least 2 days after the spike (an optimistic 1-day case is shown too).',
+  'Gains and losses are measured against the overall market (an S&P 500 fund, SPY) from the market open on the purchase day to the close 1, 5 and 20 trading days later. Trading costs are not included.',
+  'Wikipedia page views are a different signal from Reddit mentions. Reddit has no history yet, so it is tested going forward, in the forward test.',
 ];
 
 async function runResearch(pool, { log = console, B = 1000 } = {}) {
@@ -71,7 +72,7 @@ async function runResearch(pool, { log = console, B = 1000 } = {}) {
   const results = {
     status: 'ok',
     generatedAt: new Date().toISOString(),
-    signal: 'Wikipedia page views (people only), rated by the same rule as the live site (Hot or Extreme = event)',
+    signal: 'Wikipedia page views (people, not bots). A spike is a day rated Hot or Extreme, using the same rule as the Radar.',
     universe: { tickers: series.length, firstDay: days[0], lastDay: bench[bench.length - 1].day, list: series.map((s) => ({ ticker: s.ticker, article: s.article })) },
     conservative, optimistic, leadLag,
     verdict: { conservative: v.verdict(conservative), optimistic: v.verdict(optimistic) },

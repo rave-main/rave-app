@@ -6,8 +6,9 @@ Status: v2. Reddit scoring, Wikipedia supplement, price data and hypothesis test
 - Source: ApeWisdom `all-stocks` leaderboard (Reddit stock subreddits). Each snapshot gives, per ticker, `rank`,
   `mentions`, `upvotes`, `rank_24h_ago`, `mentions_24h_ago`. It is a snapshot API with no history, so RAVE builds
   its own history by collecting about every 30 minutes. There is no backfill.
-- A watchlist ticker that is not on the leaderboard is stored with `mentions = 0` and `ranked = false`, and shown
-  as "not on leaderboard" rather than as a real zero.
+- Every stock on the leaderboard (about 820) is tracked on equal terms; there is no watchlist. A stock that drops off the
+  leaderboard is stored as 0 mentions and shown as "not on the leaderboard" rather than as a real zero. Share classes of one
+  company (GOOGL / GOOG) are shown as one row.
 - Every run is recorded in `collection_runs`. Raw responses are kept 7 days; parsed rows are permanent.
 - Reddit chatter is a different signal from Google searches, and conclusions only apply to the former.
 
@@ -63,16 +64,16 @@ real data arrives.
 document; all 28 compared values (ratio and z, raw and adjusted, all horizons) matched exactly.
 
 ## Wikipedia page views (supplement, `wiki.js`)
-- Each tracked ticker is matched to an English Wikipedia article (candidate titles from the ApeWisdom name, redirects followed,
+- Each stock is matched to an English Wikipedia article (candidate titles from the ApeWisdom name, redirects followed,
   disambiguation pages and non-company lead paragraphs rejected). Matches are heuristic: review and correct them in Settings.
   A manual choice is never overwritten.
-- Daily page views (people only, Wikimedia API) are backfilled 5 years and scored by the same rule as Reddit. Views for a day
+- Daily page views (people only, Wikimedia API) are backfilled 5 years (the price tests use the last 2) and scored by the same rule as Reddit. Views for a day
   are published the following day, so Wikipedia is always about a day behind.
 - Agreement marker (two dots on the Radar): both Reddit and Wikipedia show a spike.
 
 ## Prices (`prices.js`)
-- Yahoo daily bars (exchange-local dates), 5-year backfill, benchmark SPY, weekly full refresh to pick up splits.
-  Stooq is a fallback but is blocked from Railway.
+- Yahoo Finance daily bars in US dollars (exchange-local dates), 2-year backfill, benchmark SPY, weekly full refresh to pick up
+  splits. Yahoo is the only price source.
 
 ## Hypothesis tests (`validation.js`, `research.js`)
 - Event = first Hot or Extreme day of an episode (10-day cooldown). Entry at the open of the first trading day at least
@@ -86,3 +87,9 @@ document; all 28 compared values (ratio and z, raw and adjusted, all horizons) m
 - Reddit has no history, so its spikes go into a forward ledger (one per stock per 7 days, entry at the next US open) and no
   conclusion is drawn before 30 spikes have a 5-day outcome.
 - Limits: stocks are those popular today (selection bias favours stocks that did something); no trading costs; not advice.
+
+## Words used on the site
+The site avoids jargon. How the plain words map to the maths: "times normal" = `ratio` above; "how unusual" = `z` (under 1 "within its
+normal ups and downs", 1-2 "a little unusual", 2-3.5 "unusual", over 3.5 "very unusual"); "gain or loss vs market" = the abnormal return
+against SPY; "could it be luck?" = the placebo-shift p-value (under 0.025 "unlikely"); "$ per $1,000" = the average market-adjusted
+return times 1,000. Prices are US dollars; times are the viewer's local time unless a page says UTC.

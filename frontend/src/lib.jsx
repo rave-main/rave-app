@@ -76,6 +76,21 @@ export const times = (r) => (r === null || r === undefined ? '—' : `${r >= 10 
 export const clock = (iso) => new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 export const dateTime = (iso) => new Date(iso).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 
+// Money and price changes. Prices are US dollars.
+export const usd = (n) => (n === null || n === undefined ? '—' : `$${n >= 100 ? n.toLocaleString('en-US', { maximumFractionDigits: 0 }) : n.toFixed(2)}`);
+export const signedPct = (x, digits = 1) => (x === null || x === undefined ? '—' : `${x >= 0 ? '+' : '−'}${(Math.abs(x) * 100).toFixed(digits)}%`);
+export const signedUsd = (x) => (x === null || x === undefined ? '—' : `${x >= 0 ? '+' : '−'}$${Math.abs(Math.round(x)).toLocaleString('en-US')}`);
+
+// A small "what does this mean?" note that opens on click
+export function Explain({ title = 'What does this mean?', children }) {
+  return (
+    <details className="explain">
+      <summary>{title}</summary>
+      <div>{children}</div>
+    </details>
+  );
+}
+
 // z-score in plain words (z measures how many typical day-to-day swings away from normal today is)
 export function unusual(z) {
   if (z === null || z === undefined) return '';

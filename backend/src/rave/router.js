@@ -1,9 +1,8 @@
 const express = require('express');
 const { wrap } = require('../auth');
 const { loadSeries } = require('./series');
-const { scoreStock } = require('./scoring');
 const { auditRuns } = require('./audit');
-const { scoredStocks, dayOverDay } = require('./tracked');
+const { scoredStocks, listStocks, dayOverDay, mergeSeries } = require('./tracked');
 const { jobsStatus } = require('./scheduler');
 const { buildJobs } = require('./jobs');
 const { runCollection } = require('./collector');
@@ -36,49 +35,47 @@ function raveRouter(pool) {
   const router = express.Router();
   const jobs = buildJobs();
 
-  router.get('/watchlist', wrap(async (req, res) => {
-    const { rows } = await pool.query(
-      'SELECT ticker, name, is_control AS "isControl", active FROM watchlist ORDER BY is_control, ticker'
-    );
-    res.json(rows);
-  }));
-
-  // Every tracked stock (watchlist + anything that reached 5 mentions a day lately) with RAVE scores
+  // Every stock on the leaderboard (share classes merged) with RAVE scores, Wikipedia signal and latest price
   router.get('/stocks', wrap(async (req, res) => {
     res.json(await scoredStocks(pool));
   }));
 
   // One stock: latest state, full score explanations and its history (hours = 1..2160, default 168).
-  // Works for ANY ticker that has been on the leaderboard, not only the tracked ones.
+  // Accepts any share-class ticker of a company (GOOG shows the GOOGL page).
   router.get('/stocks/:ticker', wrap(async (req, res) => {
     const ticker = req.params.ticker.toUpperCase();
     const hours = Math.min(Math.max(parseInt(req.query.hours, 10) || 168, 1), 2160);
-    const { rows: [stock] } = await pool.query(
-      `SELECT t.ticker, coalesce(w.name, t.name, t.ticker) AS name, w.ticker IS NOT NULL AS "isWatchlist", coalesce(w.is_control, false) AS "isControl",
-              t.rank_24h_ago AS "rank24hAgo", t.mentions_24h_ago AS "mentions24hAgo", t.mentions
-       FROM tickers t LEFT JOIN watchlist w ON w.ticker = t.ticker AND w.active WHERE t.ticker = $1`, [ticker]
-    );
-    if (!stock) return res.status(404).json({ error: 'Ticker not found' });
-    const series = (await loadSeries(pool, [ticker])).get(ticker);
+    const stocks = await scoredStocks(pool);
+    const stock = stocks.find((s) => s.tickers.includes(ticker));
+    if (!stock) {
+      const { rows: [t] } = await pool.query('SELECT 1 FROM tickers WHERE ticker = $1', [ticker]);
+      return res.status(404).json({ error: t ? 'This stock has not been on the leaderboard for a week' : 'Ticker not found' });
+    }
+    const main = stock.ticker;
+    const loaded = await loadSeries(pool, stock.tickers);
+    const series = mergeSeries(stock.tickers.map((t) => loaded.get(t)));
     const since = Date.now() - hours * 3600 * 1000;
     const latest = series[series.length - 1] || null;
-    const { rows: [m] } = await pool.query('SELECT article, status, confidence, source, extract FROM wiki_pages WHERE ticker = $1', [ticker]);
+    const { rows: [m] } = await pool.query('SELECT article, status, confidence, source, extract FROM wiki_pages WHERE ticker = $1', [main]);
     const wseries = m?.article ? (await loadWikiSeries(pool, [m.article])).get(m.article) : [];
-    const priceRows = (await loadPrices(pool, [ticker], { fromDay: new Date(Date.now() - 400 * 86400000).toISOString().slice(0, 10) })).get(ticker);
+    const priceRows = (await loadPrices(pool, [main], { fromDay: new Date(Date.now() - 400 * 86400000).toISOString().slice(0, 10) })).get(main);
     const { rows: spikes } = await pool.query(
-      `SELECT detected_at AS "detectedAt", label, ratio, z, mentions, wiki_label AS "wikiLabel", entry_day::text AS "entryDay", outcomes FROM spike_events WHERE ticker = $1 ORDER BY detected_at DESC LIMIT 20`, [ticker]
+      `SELECT detected_at AS "detectedAt", label, ratio, z, mentions, wiki_label AS "wikiLabel", entry_day::text AS "entryDay", entry_open AS "entryOpen", outcomes
+       FROM spike_events WHERE ticker = $1 ORDER BY detected_at DESC LIMIT 20`, [main]
     );
     res.json({
       prices: priceRows.map((p) => ({ day: p.day, close: p.close })),
+      price: stock.price,
       spikes,
       wiki: {
         article: m?.article || null, status: m?.status || 'pending', confidence: m?.confidence || 'none', source: m?.source || 'auto', extract: m?.extract || null,
-        scores: m?.article ? scoreStock(wseries, { ticker, source: 'wiki' }) : null,
+        scores: stock.wiki.scores,
         history: wseries.filter((p) => p.t >= Date.now() - 400 * 86400000).map((p) => ({ t: p.t, views: p.mentions })),
       },
-      ticker: stock.ticker, name: stock.name, isWatchlist: stock.isWatchlist, isControl: stock.isControl,
+      ticker: main, tickers: stock.tickers, label: stock.label, name: stock.name,
+      rank: stock.rank, rank24hAgo: stock.rank24hAgo, ranked: stock.ranked,
       latest: latest && { ...latest, dayOverDay: dayOverDay({ mentions: latest.mentions, mentions24hAgo: stock.mentions24hAgo }) },
-      scores: scoreStock(series, { ticker }),
+      scores: stock.scores,
       history: series.filter((p) => p.t >= since).map((p) => ({ t: p.t, mentions: p.mentions, rank: p.rank, ranked: p.ranked, market: p.market })),
     });
   }));
@@ -104,16 +101,16 @@ function raveRouter(pool) {
     res.json(rows);
   }));
 
-  // The ticker -> Wikipedia article mapping, for review (automatic matches are heuristic)
+  // The stock -> Wikipedia article mapping, for review (automatic matches are heuristic). One entry per company.
   router.get('/wiki', wrap(async (req, res) => {
-    const { rows } = await pool.query(
-      `SELECT t.ticker, coalesce(w.name, t.name) AS name, p.article, coalesce(p.status, 'pending') AS status, coalesce(p.confidence, 'none') AS confidence,
-              coalesce(p.source, 'auto') AS source, p.extract, p.rejected_article AS "rejectedArticle", p.checked_at AS "checkedAt",
+    const stocks = await listStocks(pool);
+    const { rows: pages } = await pool.query(
+      `SELECT p.ticker, p.article, p.status, p.confidence, p.source, p.extract, p.rejected_article AS "rejectedArticle", p.checked_at AS "checkedAt",
               (SELECT max(month) FROM wiki_months m WHERE m.article = p.article) AS "lastMonth"
-       FROM tickers t LEFT JOIN watchlist w ON w.ticker = t.ticker LEFT JOIN wiki_pages p ON p.ticker = t.ticker
-       WHERE w.ticker IS NOT NULL OR p.ticker IS NOT NULL ORDER BY (p.article IS NULL), t.ticker`
+       FROM wiki_pages p WHERE p.ticker = ANY($1)`, [stocks.map((s) => s.ticker)]
     );
-    res.json(rows);
+    const by = new Map(pages.map((p) => [p.ticker, p]));
+    res.json(stocks.map((s) => ({ ticker: s.ticker, label: s.label, name: s.name, mentions: s.mentions, article: null, status: 'pending', confidence: 'none', source: 'auto', ...(by.get(s.ticker) || {}) })));
   }));
 
   // Correct (or clear) a ticker's Wikipedia article. A manual choice is never overwritten by the automatic matcher.

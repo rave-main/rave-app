@@ -1,94 +1,75 @@
-# RAVE data pipeline: collection, aggregation and storage
+# RAVE data pipeline: collection, storage and aggregation
 
-Reflects the code on branch `claude/loving-fermi-cq6r5e`. Items marked (live) are confirmed on the real service.
+Reflects the code on `main`. Everything below was checked against the real services unless marked (assumed).
 
-## 1. Collection
-- **Source:** ApeWisdom `all-stocks` leaderboard, `https://apewisdom.io/api/v1.0/filter/all-stocks/page/N`. Free, no key.
-  Reddit stock-mention counts. (live) 820 tickers over 9 pages of 100; per ticker: `rank`, `ticker`, `name`,
-  `mentions`, `upvotes`, `rank_24h_ago`, `mentions_24h_ago`. Whole leaderboard takes about 9 s to fetch.
-- **Who collects:** the Node backend on Railway (`backend/src/rave/collector.js`), the same process that serves the
-  API. No GitHub Actions, no Python, no external scheduler.
-- **When:** first run 5 s after the backend boots, then every 30 min plus 0-5 min random jitter. A restart or
-  overlapping deploy skips if a successful run exists from the last 10 min. A Postgres advisory lock (key 727275)
-  means two instances can never collect at once.
-- **How:** all pages are fetched one after another (750 ms apart, 15 s timeout). Network errors, HTTP 429 and 5xx are
-  retried 3 times (1 s, 3 s, 9 s). Other 4xx responses and non-JSON bodies fail immediately. If ANY page cannot be
-  fetched, the whole run fails and saves nothing: a partial leaderboard would make watchlist stocks look unranked.
-  The response shape is validated (numbers may arrive as strings or numbers; both are handled).
-- **Failure handling:** a failed run is recorded with its error and the previous data stays as it was. A run
-  interrupted mid-way (process killed during a deploy) is marked failed ("abandoned") by the next run after 15 min.
-- **Not built yet:** repairing a missed 30-minute slot (a short deploy gap loses that snapshot). Planned for milestone 5.
+## 1. Sources and schedule
+All times are UTC. Defined in `backend/src/rave/jobs.js`; run by `scheduler.js`.
 
-## 2. What is kept from each collection run
-One collection run = one timestamp (`fetched_at` = when the run started). From the 820 tickers RAVE stores:
-- every **watchlist** ticker (8 hype stocks + 2 controls). One missing from the leaderboard is stored as
-  `mentions = 0`, `ranked = false`, shown as "not on leaderboard", never as a silent zero;
-- the **top 100** tickers of the leaderboard (for a future "Discover" view);
-- the **market total** = sum of mentions over ALL tickers on the leaderboard (including the ones not stored),
-  saved on the run. It is the denominator for the market-adjusted ("share") view.
-That is about 103 snapshot rows per run, about 4,900 a day, about 1.8 million a year.
-The raw API responses (all pages) are also kept for 7 days: (live) about 112 KB of JSON per run, about 76 KB as stored
-(compressed), so roughly 26 MB at steady state. They exist so stored values can be re-verified (see Integrity below).
-
-## 3. Where it is stored
-Postgres, in the Railway project `rave-app` (service `Postgres`, with a persistent volume, reachable only on
-Railway's private network). Only the backend can read or write it; the website reaches data solely through the
-sign-in protected `/api/rave/*` endpoints. Tables (migrations in `backend/src/db.js`, run automatically on start):
-
-| Table | One row per | Holds | Kept |
+| Source | When | What it gives | Notes |
 |---|---|---|---|
-| `watchlist` | tracked stock | ticker, name, is_control, active | permanent, editable |
-| `collection_runs` | collection attempt | status (running/success/failed), start/finish, pages fetched/total, tickers seen, rows written, market total mentions, error text | permanent |
-| `snapshots` | stock per run | ticker, fetched_at, ranked, rank, mentions, upvotes, rank_24h_ago, mentions_24h_ago. Unique on (source, ticker, fetched_at) | permanent |
-| `raw_snapshots` | page per run | the untouched JSON page | 7 days, then deleted |
+| ApeWisdom leaderboard | :02 and :32 every hour | Reddit mentions for every stock on the leaderboard (about 820, 9 pages) | Free, no key. The source scans about twice an hour, so more often gains nothing. No history is offered, so RAVE builds its own. 10-minute ticker pages are deliberately NOT scraped. |
+| Wikipedia page views | 04:30, 16:30 | Daily views of each company's Wikipedia page (people, not bots) | Wikimedia API, free. 5-year backfill, then a top-up. A day's views appear the next day. |
+| Share prices | 12:30, 22:30 | Daily open/high/low/close/volume in US dollars, plus SPY as the market benchmark | Yahoo Finance chart endpoint only (unofficial, free). 2-year backfill, 10-day overlap on each top-up, full refresh weekly (splits). |
+| Hypothesis tests | 05:15, 23:15 | Wikipedia backtest, forward-ledger outcomes | See METHODOLOGY.md. |
 
-A run's raw pages, snapshot rows and its final status are written in ONE database transaction, so a run is either
-fully saved or not saved at all. Not stored: tickers outside the top 100 that are not on the watchlist (only counted in
-the market total), and no prices yet (milestone 3).
-No backup or export routine has been set up. The volume survives deploys, but a backup is a sensible later step.
+**Scheduler rules.** A job is *due* if it has no successful run since its latest scheduled time, so a restart, deploy or
+missed run catches up by itself. Failures retry with backoff (5 min, doubling, up to 1 hour). A run that stopped at its time
+limit (`details.partial`, used during the first big Wikipedia and price backfills) continues 5 minutes later instead of waiting
+for the next slot. Each job holds a Postgres advisory lock, so two instances never run the same job. State lives in
+`collection_runs`. The Data page lists every source and has an "Update now" button (`POST /api/rave/jobs/:kind/run`).
 
-## 4. Aggregation (at read time; nothing is pre-aggregated yet)
-- Snapshots are stored exactly as received. Everything below is computed when a page is requested, from the stored rows.
-- `backend/src/rave/series.js` loads each stock's history: the last 9 days at full resolution (about every 30 min) and
-  anything older reduced to one point per hour. The market total is joined in from `collection_runs`.
-- `backend/src/rave/scoring.js` turns that series into the short/medium/long scores (see METHODOLOGY.md): raw mentions
-  and the stock's share of all chatter (mentions per 1000 leaderboard mentions), compared with the stock's own history.
-- "Data changed" on the Data page: an md5 fingerprint of all stored (ticker:mentions) pairs per run, compared with
-  the previous SUCCESSFUL run. Different = ApeWisdom's numbers changed; the same = RAVE checked but nothing moved.
-- Sparklines (last 48 points), day-over-day (ApeWisdom's own 24h-ago figure) and the status/freshness figures are
-  also computed per request. Rollups or caching are planned before a year of data accumulates (milestone 5).
+## 2. Reddit collection (`collector.js`, `apewisdom.js`, `store.js`)
+- All 9 pages are fetched 750 ms apart; network errors, 429 and 5xx retry 3 times. If ANY page fails the whole run fails and
+  saves nothing (a partial leaderboard would make stocks look unranked).
+- Names are tidied when read (`text.js`): HTML entities decoded ("S&amp;P" becomes "S&P"), fund-family prefixes dropped.
+- Every ticker on the leaderboard is stored. There is no watchlist: all stocks are tracked on equal terms.
+- Raw API pages are kept 7 days (`raw_snapshots`) so the integrity check can re-verify stored values.
+- Each run stores an md5 fingerprint of all ticker:mentions pairs (`collection_runs.details.fp`); a different fingerprint from the
+  previous run means ApeWisdom's numbers actually changed.
 
-## 5. Integrity checks (`/api/rave/integrity`, shown on the Data page)
-For the last 48 successful runs RAVE re-derives what should be stored from the raw responses and compares: rows saved
-equal rows reported; every watchlist stock present in every run; raw pages and ticker counts equal what the run
-reported; the stored leaderboard total equals the sum of raw mentions; every stored mention count and rank equals the
-raw response. It also reports gaps in the 30-minute cadence. Verified on real data (2 live runs, 822 tickers: all pass)
-and with tests that corrupt each kind of value and confirm it is caught. Runs older than the raw retention are
-checked for row counts only.
+## 3. Where data lives (Postgres on Railway, 500 MB volume)
+Migrations are in `backend/src/db.js` (append only, run on start).
 
-## 6. Storage growth
-Measured: about 249 bytes per `snapshots` row including indexes (21,130 rows = 5.1 MB), 103 rows per run, 48 runs a day:
-about 1.2 MB a day, 450 MB a year. With 7 days of raw data (~26 MB) and Postgres's own ~84 MB, a 500 MB volume lasts
-roughly 10-11 months. The Data page shows database size against the volume. Levers if needed: a bigger volume (paid
-plan), storing the top 100 less often than every run, or rolling old rows up to hourly.
+| Table | Holds |
+|---|---|
+| `tickers` | latest state per stock: name, rank, mentions, 24h-ago figures, `last_seen` |
+| `ticker_days` | ONE row per stock per UTC day with 48 half-hour slots (arrays `mentions`, `ranks`). NULL = no run in that slot; a stock missing from the leaderboard is 0. fillfactor 70. About 220 MB a year for all stocks. |
+| `market_days` | per day, per slot: total mentions on the whole leaderboard (marks which slots a run happened in) |
+| `collection_runs` | one row per attempt of every job: status, times, `details` JSON, error |
+| `raw_snapshots` | untouched API pages, 7 days |
+| `wiki_pages` | stock to Wikipedia article match (status, confidence, source auto/override) |
+| `wiki_months` | daily page views, one row per article per month (31 slots) |
+| `prices`, `price_sync` | daily prices per stock; last sync and last error per stock |
+| `validation_runs` | stored hypothesis-test results |
+| `spike_events` | forward ledger of Reddit spikes with entry price and 1/5/20-day outcomes |
+| `alert_channels` | placeholder for Slack alerts; nothing reads it |
+| `users`, `sessions`, `notes` | sign-in and the Notes page |
 
-## 7. What is confirmed vs assumed
-- (verified 2026-10-18) `mentions` is a rolling 24-hour count: it equals the sum of ApeWisdom's 10-minute buckets over
-  24 hours for GME, NVDA, TSLA, MSFT, AAPL, PLTR, HOOD, SOFI, AMC exactly.
-- ApeWisdom's methodology page says it scans the subreddits twice an hour; a ticker counts once per post or comment
-  even if named several times; tickers are detected when written in capitals or with a $ prefix (so ambiguous
-  tickers such as common words are noisier); only tickers listed on its sister site are shown.
-- (live) The first production run saved 816 tickers / 103 rows; the source's top-100 changed between samples 3 minutes apart.
-- ApeWisdom's API has NO history. Its per-ticker web pages embed about 22 hours of 10-minute buckets; that is an
-  unofficial page (robots.txt only disallows /gotopage/; no terms page found), not an API.
+The old `watchlist` table was dropped (migration 8).
 
-## 8. Sources and schedule (v2)
-| Source | When (UTC) | Notes |
-|---|---|---|
-| ApeWisdom leaderboard | :02 and :32 every hour | all ~820 tickers, one slot of 48 per day; no 10-minute scraping |
-| Wikipedia page views | 04:30, 16:30 | 5-year backfill, then top-up |
-| Prices (Yahoo) | 12:30, 22:30 | 5-year backfill, 10-day overlap top-up, weekly full refresh |
-| Hypothesis tests | 05:15, 23:15 | backtest plus forward-ledger outcomes |
-A job is due if it has no success since its latest scheduled time, so restarts and deploys catch up. Failures back off, and
-per-job advisory locks stop overlaps. State is in `collection_runs`; the Data page lists each source with Run now.
-Storage: one row per ticker per UTC day with 48 half-hour arrays (about 220 MB a year for all tickers).
+## 4. One company, one row (`share-classes.js`)
+Share classes of the same company (GOOGL / GOOG) are merged on the Radar: mentions are added, the first ticker (the "main" one)
+carries the Wikipedia page and price, and the other ticker's page opens the same stock. Groups are found by identical company
+name on the leaderboard, plus a short list in `share-classes.js` for pairs whose names differ. Research counts one Wikipedia
+article once.
+
+## 5. Aggregation (at read time)
+`series.js` loads history (last 9 days every 30 minutes, to 40 days hourly, older every 6 hours); `scoring.js` turns it into
+scores; `tracked.js` builds the Radar rows (scores, Wikipedia signal, latest price and 1-day / 5-trading-day change) and caches
+them until the next Reddit, Wikipedia or price run lands. Scoring all ~820 stocks took about 1.7 s with 30 days of history; it
+grows with history, so watch it after a few months (the result is cached, so only the first request after a run pays).
+
+## 6. Integrity checks (`/api/rave/integrity`, Data page)
+For the last 48 runs RAVE recomputes what should be stored from the raw pages and compares: rows saved equal rows reported, raw
+page and ticker counts, leaderboard total, and every stored mention count and rank. It also reports gaps in the 30-minute
+cadence. Runs older than the raw retention are checked for row counts only; runs from the very first layout are flagged legacy.
+
+## 7. Storage and cost
+About 220 MB a year for Reddit data, roughly 40 MB for 2 years of prices for ~820 stocks, a few MB for Wikipedia. The Data page
+shows database size against the volume. See COSTS_AND_LIMITS.md.
+
+## 8. Confirmed facts about ApeWisdom
+- `mentions` is a rolling 24-hour count (equals the sum of its 10-minute buckets exactly, checked on 9 tickers).
+- It scans the subreddits about twice an hour; a ticker counts once per post or comment; tickers are detected in capitals or
+  with a $ prefix, so ambiguous tickers are noisier.
+- The API has no history. Its per-ticker web pages hold about 22 hours of 10-minute buckets, but that is an unofficial page and is not used.

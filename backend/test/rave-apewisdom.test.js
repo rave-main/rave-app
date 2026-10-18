@@ -99,3 +99,16 @@ test('a failure on any later page fails the whole fetch instead of returning a p
   const fetchImpl = async (url) => (url.endsWith('/page/1') ? respond(body([row(1, 'GME')], 2)) : respond({}, 500));
   await assert.rejects(fetchLeaderboard({ ...fast, retries: 1, fetchImpl }), /HTTP 500/);
 });
+
+test('names are stored as plain text: HTML entities decoded and fund-family prefixes dropped', () => {
+  const { rows } = parsePage({
+    pages: 1,
+    results: [
+      { rank: 1, ticker: 'VOO', name: 'Vanguard S&amp;P 500 ETF', mentions: 5 },
+      { rank: 2, ticker: 'WH', name: 'Wyndham Hotels &amp; Resorts', mentions: 4 },
+      { rank: 3, ticker: 'SPMO', name: 'Invesco Capital Management LLC - Invesco S&P 500 Momentum ETF', mentions: 3 },
+      { rank: 4, ticker: 'JNJ', name: 'Johnson & Johnson', mentions: 2 },
+    ],
+  });
+  assert.deepEqual(rows.map((r) => r.name), ['Vanguard S&P 500 ETF', 'Wyndham Hotels & Resorts', 'Invesco S&P 500 Momentum ETF', 'Johnson & Johnson']);
+});

@@ -5,13 +5,9 @@ const { slotOf, SLOTS } = require('../src/rave/store');
 
 const TEST_DB = process.env.TEST_DATABASE_URL || 'postgres://postgres:postgres@localhost:5432/rave_test';
 
-// Clears all RAVE data but keeps the seeded watchlist (and gives each watchlist stock its `tickers` row back)
+// Clears all RAVE data
 async function resetRave(pool) {
   await pool.query('TRUNCATE collection_runs, raw_snapshots, ticker_days, market_days, tickers, wiki_pages, wiki_months, prices, price_sync, validation_runs, spike_events RESTART IDENTITY CASCADE');
-  await pool.query(
-    `INSERT INTO tickers (ticker, name, first_seen, last_seen, fetched_at, ranked, mentions)
-     SELECT ticker, name, now(), now(), now(), false, 0 FROM watchlist`
-  );
 }
 
 async function setup() {

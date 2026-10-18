@@ -31,7 +31,6 @@ function yahooBody(bars, { symbol = 'GME', error = null } = {}) {
   });
 }
 const bar = (day, n) => ({ day, open: 20 + n, high: 22 + n, low: 19 + n, close: 21 + n, volume: 1000 * (n + 1), adj: 20.5 + n });
-const stooqCsv = (rows) => `Date,Open,High,Low,Close,Volume\n${rows.map((r) => `${r.day},${r.open},${r.high},${r.low},${r.close},${r.volume}`).join('\n')}\n`;
 
 test('parseYahoo reads daily bars, uses the exchange-local date, skips holidays and incomplete rows', () => {
   const body = yahooBody([bar('2026-10-12', 0), { day: '2026-10-13' }, bar('2026-10-14', 2), { day: '2026-10-15', open: 5, high: 6, low: 4, close: null }]);
@@ -46,36 +45,19 @@ test('parseYahoo turns Yahoo error shapes and junk into clear errors', () => {
   assert.throws(() => prices.parseYahoo(JSON.stringify({ chart: { result: [{}] } }), 'GME'), /no price data/);
 });
 
-test('parseStooq reads the CSV and rejects the service\'s error texts', () => {
-  const rows = prices.parseStooq(stooqCsv([{ day: '2026-10-12', open: 10, high: 12, low: 9, close: 11, volume: 500 }, { day: '2026-10-13', open: 11, high: 13, low: 10, close: 12.5, volume: 600 }]), 'gme.us');
-  assert.equal(rows.length, 2);
-  assert.deepEqual(rows[1], { day: '2026-10-13', open: 11, high: 13, low: 10, close: 12.5, adjClose: 12.5, volume: 600 });
-  assert.throws(() => prices.parseStooq('Exceeded the daily hits limit', 'gme.us'), /Exceeded the daily hits limit/);
-  assert.throws(() => prices.parseStooq('No data', 'zzz.us'), /No data/);
-  assert.deepEqual(prices.parseStooq('Date,Open,High,Low,Close,Volume\n', 'x'), []);
-});
-
 test('symbols with a class-share dot are written with a dash', () => {
   assert.equal(prices.yahooSymbol('BRK.B'), 'BRK-B');
   assert.equal(prices.yahooSymbol('gme'), 'GME');
 });
 
-test('Yahoo requests ask for the right range; the fallback chain uses Stooq when Yahoo fails and reports both when all fail', async () => {
+test('Yahoo requests ask for the right range, and a Yahoo failure is reported clearly', async () => {
   const urls = [];
-  const yahooDown = async (url) => {
-    urls.push(url);
-    return url.includes('yahoo') ? resp('', 503) : resp(stooqCsv([{ day: '2026-10-12', open: 1, high: 2, low: 1, close: 2, volume: 9 }]));
-  };
-  const out = await prices.fetchPrices('GME', '2026-10-01', '2026-10-13', { fetchImpl: yahooDown, retries: 0, retryDelayMs: 1 });
-  assert.equal(out.source, 'stooq');
-  assert.equal(out.rows.length, 1);
-  const y = urls.find((u) => u.includes('yahoo'));
-  assert.match(y, /chart\/GME\?interval=1d&period1=1790812800&period2=1791936000/);
-  assert.match(urls.find((u) => u.includes('stooq')), /s=gme\.us&i=d&d1=20261001&d2=20261013/);
-
-  const okFirst = await prices.fetchPrices('GME', '2026-10-01', '2026-10-13', { fetchImpl: async () => resp(yahooBody([bar('2026-10-12', 0)])), retries: 0 });
-  assert.equal(okFirst.source, 'yahoo');
-  await assert.rejects(prices.fetchPrices('GME', '2026-10-01', '2026-10-13', { fetchImpl: async () => resp('', 500), retries: 0, retryDelayMs: 1 }), /yahoo: .*stooq: /);
+  const ok = async (url) => { urls.push(url); return resp(yahooBody([bar('2026-10-12', 0)])); };
+  const rows = await prices.fetchPrices('GME', '2026-10-01', '2026-10-13', { fetchImpl: ok, retries: 0, retryDelayMs: 1 });
+  assert.equal(rows.length, 1);
+  assert.match(urls[0], /chart\/GME\?interval=1d&period1=1790812800&period2=1791936000/);
+  await assert.rejects(prices.fetchPrices('GME', '2026-10-01', '2026-10-13', { fetchImpl: async () => resp('', 500), retries: 0, retryDelayMs: 1 }), /HTTP 500/);
+  assert.equal('fetchStooq' in prices, false, 'Yahoo is the only price source');
 });
 
 test('retries 429 with backoff and fails fast on other client errors', async () => {
@@ -90,7 +72,7 @@ test('retries 429 with backoff and fails fast on other client errors', async () 
 test('savePrices upserts: re-saving corrects values without duplicating rows', async () => {
   await resetRave(pool);
   await prices.savePrices(pool, 'GME', [{ day: '2026-10-12', open: 1, high: 2, low: 1, close: 2, adjClose: 2, volume: 10 }], 'yahoo');
-  await prices.savePrices(pool, 'GME', [{ day: '2026-10-12', open: 1, high: 3, low: 1, close: 2.5, adjClose: 2.5, volume: 12 }, { day: '2026-10-13', open: 2, high: 3, low: 2, close: 3, adjClose: 3, volume: 5 }], 'stooq');
+  await prices.savePrices(pool, 'GME', [{ day: '2026-10-12', open: 1, high: 3, low: 1, close: 2.5, adjClose: 2.5, volume: 12 }, { day: '2026-10-13', open: 2, high: 3, low: 2, close: 3, adjClose: 3, volume: 5 }], 'yahoo');
   const got = (await prices.loadPrices(pool, ['GME', 'XXX'])).get('GME');
   assert.equal(got.length, 2);
   assert.equal(got[0].close, 2.5);
@@ -118,30 +100,29 @@ function priceServer({ fail = [], dead = false } = {}) {
   return { fetchImpl, calls };
 }
 const universeSeed = () => seedHistory(pool, { TSLA: simulateCounts({ days: 2, level: 30, seed: 1 }), GME: simulateCounts({ days: 2, level: 30, seed: 2 }) });
-const run = (srv, now) => runPrices(pool, { fetchImpl: srv.fetchImpl, pauseMs: 0, log: quiet, now, sources: [['yahoo', prices.fetchYahoo]] });
+const run = (srv, now) => runPrices(pool, { fetchImpl: srv.fetchImpl, pauseMs: 0, log: quiet, now });
 
-test('the price job backfills 5 years for the whole universe (benchmark first), then only tops up', async () => {
+test('the price job backfills 2 years for the whole universe (benchmark first), then only tops up', async () => {
   await resetRave(pool);
   await universeSeed();
   const srv = priceServer();
   const t0 = Date.parse('2026-10-19T23:00:00Z');
   const first = await run(srv, t0);
-  assert.equal(first.universe, 11, 'ten watchlist stocks plus the SPY benchmark');
-  assert.equal(first.fetched, 11);
-  assert.equal(first.fullRefreshes, 11);
-  assert.equal(first.sources.yahoo, 11);
+  assert.equal(first.universe, 3, 'two stocks on the leaderboard plus the SPY benchmark');
+  assert.equal(first.fetched, 3);
+  assert.equal(first.fullRefreshes, 3);
   assert.equal(srv.calls[0].symbol, 'SPY', 'the benchmark goes first');
-  assert.ok(srv.calls[0].from <= '2021-10-21', `backfill starts ${srv.calls[0].from}`);
-  assert.ok(first.rowsAdded > 11 * 1200, `${first.rowsAdded} rows`);
-  assert.equal((await pool.query(`SELECT count(DISTINCT ticker)::int AS n FROM prices`)).rows[0].n, 11);
+  assert.ok(srv.calls[0].from <= '2024-10-21' && srv.calls[0].from >= '2024-10-15', `backfill starts ${srv.calls[0].from}`);
+  assert.ok(first.rowsAdded > 3 * 480, `${first.rowsAdded} rows`);
+  assert.equal((await pool.query(`SELECT count(DISTINCT ticker)::int AS n FROM prices`)).rows[0].n, 3);
 
   const calls1 = srv.calls.length;
   const same = await run(srv, t0 + 30 * 60000); // 23:30 the same day
-  assert.equal(same.skipped, 11, 'already synced through today: nothing to do');
+  assert.equal(same.skipped, 3, 'already synced through today: nothing to do');
   assert.equal(srv.calls.length, calls1);
 
   const next = await run(srv, t0 + 24 * 3600000); // the next day
-  assert.equal(next.fetched, 11);
+  assert.equal(next.fetched, 3);
   assert.equal(next.fullRefreshes, 0, 'a top-up, not a full refresh');
   const c = srv.calls[calls1];
   assert.ok(c.from >= '2026-10-08' && c.from <= '2026-10-10', `top-up overlaps the last 10 days: from ${c.from}`);
@@ -155,7 +136,7 @@ test('a full refresh is repeated weekly (splits rewrite history)', async () => {
   const t0 = Date.parse('2026-10-19T23:00:00Z');
   await run(srv, t0);
   const weekLater = await run(srv, t0 + 8 * 24 * 3600000);
-  assert.equal(weekLater.fullRefreshes, 11);
+  assert.equal(weekLater.fullRefreshes, 3);
 });
 
 test('one failing ticker is recorded and skipped; mostly failing fails the whole run', async () => {
@@ -163,14 +144,27 @@ test('one failing ticker is recorded and skipped; mostly failing fails the whole
   await universeSeed();
   const some = await run(priceServer({ fail: ['GME'] }), Date.parse('2026-10-19T23:00:00Z'));
   assert.equal(some.errorCount, 1);
-  assert.equal(some.fetched, 10);
+  assert.equal(some.fetched, 2);
   assert.match(some.errors[0], /^GME: .*No data found/);
   const { rows: [s] } = await pool.query(`SELECT error FROM price_sync WHERE ticker = 'GME'`);
   assert.match(s.error, /No data found/);
 
   await resetRave(pool);
   await universeSeed();
-  await assert.rejects(run(priceServer({ dead: true }), Date.parse('2026-10-19T23:00:00Z')), /Price fetches failing for \d+ of \d+ tickers/);
+  await assert.rejects(run(priceServer({ dead: true }), Date.parse('2026-10-19T23:00:00Z')), /Price fetches failing \(3 of 3 tickers\)/);
+
+  // a ticker Yahoo rejected is not asked again on every run: it waits a few days
+  await resetRave(pool);
+  await universeSeed();
+  const srv = priceServer({ fail: ['GME'] });
+  const t0 = Date.parse('2026-10-19T23:00:00Z');
+  await run(srv, t0);
+  srv.calls.length = 0;
+  await run(srv, t0 + 24 * 3600000);
+  assert.ok(!srv.calls.some((c) => c.symbol === 'GME'), 'GME is not retried the next day');
+  srv.calls.length = 0;
+  await run(srv, t0 + 4 * 24 * 3600000);
+  assert.ok(srv.calls.some((c) => c.symbol === 'GME'), 'GME is retried after three days');
 });
 
 test('a ticker with no history yet is synced before ones that only need a top-up', async () => {
@@ -179,9 +173,9 @@ test('a ticker with no history yet is synced before ones that only need a top-up
   const srv = priceServer();
   const t0 = Date.parse('2026-10-19T23:00:00Z');
   await run(srv, t0);
-  await pool.query(`DELETE FROM price_sync WHERE ticker = 'AMC'`);
+  await pool.query(`DELETE FROM price_sync WHERE ticker = 'TSLA'`);
   srv.calls.length = 0;
   await run(srv, t0 + 24 * 3600000);
   assert.equal(srv.calls[0].symbol, 'SPY');
-  assert.equal(srv.calls[1].symbol, 'AMC', 'the unsynced ticker comes right after the benchmark');
+  assert.equal(srv.calls[1].symbol, 'TSLA', 'the unsynced ticker comes right after the benchmark');
 });

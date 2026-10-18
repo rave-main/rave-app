@@ -33,7 +33,6 @@ async function runCollection(pool, { fetchLeaderboard = apewisdom.fetchLeaderboa
       [KIND, at]
     );
     try {
-      const { rows: watch } = await pool.query('SELECT ticker FROM watchlist WHERE active');
       const leaderboard = await fetchLeaderboard();
       const rows = leaderboard.rows; // every ticker on the leaderboard is stored (compactly, see store.js)
       const marketTotal = rows.reduce((sum, r) => sum + r.mentions, 0);
@@ -49,7 +48,7 @@ async function runCollection(pool, { fetchLeaderboard = apewisdom.fetchLeaderboa
             [run.id, SOURCE, leaderboard.filter, page, run.started_at, JSON.stringify(payload)]
           );
         }
-        await storeRun(client, { startedAt: run.started_at, rows, marketTotal, watchlist: watch.map((w) => w.ticker) });
+        await storeRun(client, { startedAt: run.started_at, rows, marketTotal });
         await client.query(
           `UPDATE collection_runs SET status = 'success', finished_at = now(), pages_fetched = $2, pages_total = $3,
              tickers_seen = $4, rows_written = $5, market_total_mentions = $6, details = $7 WHERE id = $1`,

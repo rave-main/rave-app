@@ -390,21 +390,22 @@ function verdict(study, { minEvents = 30, alpha = 0.05 } = {}) {
   // attention adds information only if most of the size difference survives comparing with equally volatile stretches
   // (true volatility is hidden, so matching on recent moves is imperfect and a small residue is expected either way)
   const sizeBeyond = Boolean(m5?.size) && m5.size.p < bonferroni && m5.size.mean >= 0.5 * r5.size.mean;
-  const pct = (x) => `${(x * 100).toFixed(2)}%`;
+  const pct = (x) => `${(x * 100).toFixed(1)}%`;
+  const luck = (p) => (p < 0.001 ? 'under 0.1%' : `${(p * 100).toFixed(1)}%`);
   const details = [
-    `Size of move over the next 5 trading days: ${pct(r5.size.eventMean)} after a spike vs ${pct(r5.size.controlMean)} on ordinary days (difference ${pct(r5.size.mean)}, 95% range ${pct(r5.size.ci[0])} to ${pct(r5.size.ci[1])}, p = ${r5.size.p.toFixed(3)}).`,
-    `Direction: average market-adjusted return ${pct(r5.direction.eventMean)} after a spike vs ${pct(r5.direction.controlMean)} on ordinary days (difference ${pct(r5.direction.mean)}, 95% range ${pct(r5.direction.ci[0])} to ${pct(r5.direction.ci[1])}, p = ${r5.direction.p.toFixed(3)}); ${(r5.direction.hitRate * 100).toFixed(0)}% of spikes were followed by a gain vs ${(r5.direction.controlHitRate * 100).toFixed(0)}% of ordinary days.`,
+    `Over the next 5 trading days, shares moved by ${pct(r5.size.eventMean)} on average (up or down) after a spike, against ${pct(r5.size.controlMean)} on ordinary days. The difference is ${pct(r5.size.mean)} (plausible range ${pct(r5.size.ci[0])} to ${pct(r5.size.ci[1])}). Chance this is just luck: ${luck(r5.size.p)}.`,
+    `Compared with the overall market, shares gained ${pct(r5.direction.eventMean)} on average after a spike, against ${pct(r5.direction.controlMean)} on ordinary days (plausible range of the difference ${pct(r5.direction.ci[0])} to ${pct(r5.direction.ci[1])}). ${(r5.direction.hitRate * 100).toFixed(0)}% of spikes were followed by a gain, against ${(r5.direction.controlHitRate * 100).toFixed(0)}% of ordinary days. Chance this is just luck: ${luck(r5.direction.p)}.`,
   ];
   if (m5?.size) {
-    details.push(`Beyond recent volatility: compared with days that followed an equally volatile stretch, the size difference is ${pct(m5.size.mean)} (95% range ${pct(m5.size.ci[0])} to ${pct(m5.size.ci[1])}, p = ${m5.size.p.toFixed(3)}); ${r5.size.mean > 0 ? Math.round(Math.max(0, (100 * m5.size.mean) / r5.size.mean)) : 0}% of the plain difference remains.`);
+    details.push(`Allowing for how jumpy the share price already was, the extra movement is ${pct(m5.size.mean)} (plausible range ${pct(m5.size.ci[0])} to ${pct(m5.size.ci[1])}). That is ${r5.size.mean > 0 ? Math.round(Math.max(0, (100 * m5.size.mean) / r5.size.mean)) : 0}% of the difference above. Chance this is just luck: ${luck(m5.size.p)}.`);
   }
   if (sizeSig && !sizeBeyond && !dirSig) {
-    return { level: 'marker', headline: 'Spikes mark stocks that are already moving a lot, and big moves tend to continue for a few days. Once recent volatility is accounted for, attention adds no information about the size or direction of what comes next.', details };
+    return { level: 'marker', headline: 'Spikes tend to appear on shares that are already moving a lot, and big moves often carry on for a few days. Once that is allowed for, a spike gives no extra clue about how far, or which way, the price will go.', details };
   }
-  if (sizeSig && dirSig) return { level: 'both', headline: `Spikes were followed by larger AND directional price moves (${r5.direction.mean > 0 ? 'up' : 'down'}), at an entry ${study.lagDays} days after the spike.`, details };
-  if (sizeSig) return { level: 'size', headline: 'Spikes were followed by larger price moves, even compared with equally volatile stretches, but not in a consistent direction: attention predicts how much, not which way.', details };
-  if (dirSig) return { level: 'direction', headline: `Spikes were followed by a ${r5.direction.mean > 0 ? 'rise' : 'fall'} in price, without larger moves overall.`, details };
-  return { level: 'none', headline: `No evidence that these spikes precede unusual price moves when entering ${study.lagDays} days after the signal.`, details };
+  if (sizeSig && dirSig) return { level: 'both', headline: `After a spike, prices moved further than usual and tended to go ${r5.direction.mean > 0 ? 'up' : 'down'}, when buying ${study.lagDays} days after the spike.`, details };
+  if (sizeSig) return { level: 'size', headline: 'After a spike, prices moved further than usual, even compared with equally jumpy periods, but not in a consistent direction. Attention hints at how much a price may move, not which way.', details };
+  if (dirSig) return { level: 'direction', headline: `After a spike, prices tended to ${r5.direction.mean > 0 ? 'rise' : 'fall'}, without moving further overall.`, details };
+  return { level: 'none', headline: `No sign that these spikes come before unusual price moves when buying ${study.lagDays} days after the spike.`, details };
 }
 
 module.exports = { findEvents, indexPrices, firstTradingOnOrAfter, outcomeAt, eventStudy, leadLag, verdict, pearson, makeRng, addDays, HORIZONS };

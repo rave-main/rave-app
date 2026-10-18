@@ -238,6 +238,12 @@ const migrations = [
      config JSONB NOT NULL DEFAULT '{}',
      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
    );`,
+
+  // Every leaderboard stock is tracked on equal terms, so the watchlist goes. Names stored with HTML entities
+  // ("S&amp;P") are tidied now (new collections store plain text) and unmatched Wikipedia lookups are retried.
+  `DROP TABLE watchlist;
+   UPDATE tickers SET name = replace(replace(replace(replace(name, '&amp;', '&'), '&quot;', '"'), '&lt;', '<'), '&gt;', '>') WHERE name LIKE '%&%;%';
+   UPDATE wiki_pages SET checked_at = 'epoch' WHERE source = 'auto' AND status <> 'resolved';`,
 ];
 
 function createPool(connectionString = process.env.DATABASE_URL) {

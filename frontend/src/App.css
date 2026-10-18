@@ -187,14 +187,19 @@ td.num small { display: inline; margin-left: 4px; }
 .integrity.fail { border-color: rgba(255, 92, 122, 0.6); }
 
 /* research, settings, sources */
+.lede { color: var(--muted); font-size: 0.95rem; line-height: 1.55; margin: 14px 0 6px; max-width: 70ch; }
+.explain { margin: 8px 0; font-size: 0.88rem; color: var(--muted); }
+.explain summary { cursor: pointer; color: var(--accent-2); font-weight: 500; }
+.explain > div { margin-top: 8px; line-height: 1.55; }
+.explain ul { margin: 6px 0 0; padding-left: 20px; }
+.explain li { margin: 4px 0; }
 .verdicts { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; margin: 12px 0; }
 .verdict-card { border: 1px solid var(--border); border-radius: 10px; padding: 14px; }
-.verdict-card strong { display: block; font-size: 1.15rem; margin: 4px 0; }
+.verdict-card strong { display: block; font-size: 1.1rem; margin: 4px 0; }
 .verdict-card p { margin: 0; font-size: 0.9rem; color: var(--muted); }
-.verdict-card.lvl-none, .verdict-card.lvl-marker { border-color: var(--warn); }
-.verdict-card.lvl-both, .verdict-card.lvl-size, .verdict-card.lvl-direction { border-color: var(--ok); }
+.verdict-card.tone-none { border-color: var(--warn); }
+.verdict-card.tone-good { border-color: var(--ok); }
 .detail { font-size: 0.88rem; color: var(--muted); margin: 6px 0; }
-td.sig { background: rgba(61, 220, 151, 0.14); }
 .caveats { color: var(--muted); font-size: 0.9rem; padding-left: 20px; }
 .meter { height: 10px; background: var(--border); border-radius: 999px; overflow: hidden; margin: 10px 0; }
 .meter i { display: block; height: 100%; background: linear-gradient(90deg, var(--accent-2), var(--accent)); }
@@ -204,6 +209,9 @@ td.sig { background: rgba(61, 220, 151, 0.14); }
 form.inline { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 form.inline input { flex: 1; min-width: 180px; }
 h3 { font-size: 1rem; margin: 20px 0 8px; }
+.price-line { margin: 4px 0; } .price-line strong { font-size: 1.3rem; } .price-line small { color: var(--muted); margin-left: 2px; }
+.up { color: var(--ok); } .down { color: var(--err); }
+@media (max-width: 720px) { .hide-sm { display: none; } }
 
 /* six tabs must fit a phone: scroll the tab bar instead of the page */
 .tabs { overflow-x: auto; scrollbar-width: none; }

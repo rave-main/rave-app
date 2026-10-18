@@ -130,7 +130,10 @@ test('saveViews/loadWikiSeries round-trip across months, merge into existing mon
   assert.deepEqual([...(await wiki.loadWikiSeries(pool, ['Bar'])).get('Bar')], []);
 });
 
-const trackedHistory = () => seedHistory(pool, { TSLA: simulateCounts({ days: 2, level: 30, seed: 1 }), GME: simulateCounts({ days: 2, level: 30, seed: 2 }) });
+const trackedHistory = async () => {
+  await seedHistory(pool, { TSLA: simulateCounts({ days: 2, level: 30, seed: 1 }), GME: simulateCounts({ days: 2, level: 30, seed: 2 }) });
+  await pool.query(`UPDATE tickers SET name = CASE ticker WHEN 'TSLA' THEN 'Tesla' ELSE 'GameStop' END`);
+};
 
 test('the Wikipedia job resolves tracked stocks, backfills history, then only fetches new days', async () => {
   await resetRave(pool);
@@ -139,11 +142,9 @@ test('the Wikipedia job resolves tracked stocks, backfills history, then only fe
   const series = { 'Tesla, Inc.': () => 1000, GameStop: () => 500 };
   const { fetchImpl, calls } = fakeWikipedia({ views: series });
   const first = await runWikipedia(pool, { fetchImpl, pauseMs: 0, log: { log() {}, error() {} } });
-  // the tracked set is the whole seeded watchlist: five of its ten names have an article in the fake (Tesla, GameStop,
-  // Apple, Nvidia, Palantir); only Tesla and GameStop have view data, the others answer 404 (= no data)
   const mapping = (await pool.query('SELECT ticker, article, status FROM wiki_pages WHERE article IS NOT NULL ORDER BY ticker')).rows;
-  assert.equal(first.newlyResolved, 5, JSON.stringify(mapping));
-  assert.equal(first.articlesFetched, 5);
+  assert.equal(first.newlyResolved, 2, JSON.stringify(mapping));
+  assert.equal(first.articlesFetched, 2);
   assert.ok(first.daysAdded > 2 * 1700, `${first.daysAdded} days of history backfilled (about 5 years each)`);
   const back = calls.views.find((c) => c.article === 'GameStop');
   assert.ok(Number(back.start.slice(0, 4)) <= new Date().getUTCFullYear() - 4, `backfill starts ${back.start}`);
@@ -155,7 +156,7 @@ test('the Wikipedia job resolves tracked stocks, backfills history, then only fe
   assert.equal(second.daysAdded, 0, 'already complete up to yesterday: nothing new to store');
   const again = calls.views.slice(before).map((c) => c.article);
   assert.ok(!again.includes('GameStop') && !again.includes('Tesla, Inc.'), 'articles that are up to date are not requested again');
-  assert.equal(again.length, 3, 'only the three articles that have no data at all are asked again');
+  assert.equal(again.length, 0, 'nothing is asked again');
   assert.ok(today);
 });
 
@@ -216,7 +217,7 @@ test('stocks include the wiki signal and an agreement flag; the single-stock end
   assert.equal(gme.wiki.article, 'GameStop');
   assert.equal(gme.wiki.scores.short.status, 'ok');
   assert.match(['none', 'reddit', 'wiki', 'both'].join(), new RegExp(gme.agreement));
-  assert.equal(body.find((s) => s.ticker === 'TSLA').wiki.status, 'pending');
+  assert.equal(body.find((s) => s.ticker === 'GME').wiki.status, 'resolved');
   const one = await agent.get('/api/rave/stocks/GME').expect(200);
   assert.equal(one.body.wiki.article, 'GameStop');
   assert.ok(one.body.wiki.history.length >= 50);
@@ -229,7 +230,7 @@ test('run-now and diagnostics endpoints require sign-in, start jobs, and report 
   const { runDiagnostics } = require('../src/rave/diagnostics');
   const results = await runDiagnostics([], { fetchImpl: async (url) => resp(url.includes('wikimedia') ? { items: [{ views: 5 }] } : url.includes('wikipedia.org') ? { query: { pages: [{ title: 'GameStop' }] } } : { results: [{}] }) });
   assert.deepEqual(results.slice(0, 3).map((r) => [r.source, r.ok]), [['apewisdom', true], ['wikipedia-api', true], ['wikimedia-pageviews', true]]);
-  assert.deepEqual(results.slice(3).map((r) => r.source), ['yahoo-prices', 'stooq-prices'], 'price sources are probed too');
+  assert.deepEqual(results.slice(3).map((r) => r.source), ['yahoo-prices'], 'the price source is probed too');
   const blocked = await runDiagnostics([], { fetchImpl: async () => { const e = new Error('fetch failed'); e.cause = { code: 'ENOTFOUND' }; throw e; } });
   assert.ok(blocked.every((r) => !r.ok && /ENOTFOUND/.test(r.detail)));
 });

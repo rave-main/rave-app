@@ -40,7 +40,7 @@ test('a normal series of runs passes every check', async () => {
   assert.equal(audit.runsWithRawData, 3);
   assert.deepEqual(failing(audit), []);
   assert.equal(audit.ok, true);
-  assert.equal(audit.checks.length, 6);
+  assert.equal(audit.checks.length, 5);
   assert.equal(audit.cadence.gapsOver45Min, 0);
   assert.equal(audit.note, null);
 });
@@ -54,15 +54,14 @@ test('detects a stored value that differs from the raw response', async () => {
   assert.match(audit.checks.find((c) => c.id === 'values-match').problems[0], /1 stored value\(s\) differ/);
 });
 
-test('detects a missing ticker, a wrong total, a missing watchlist stock and a phantom ticker', async () => {
+test('detects a missing ticker, a wrong total and a phantom ticker', async () => {
   await collect(2);
   const a = await slotOfRun(1);
   const b = await slotOfRun(2);
   await pool.query(`DELETE FROM ticker_days WHERE ticker = 'T7' AND day = $1`, [a.day]); // a listed ticker lost
   await pool.query(`UPDATE market_days SET market[$2] = market[$2] + 5 WHERE day = $1`, [b.day, b.slot + 1]); // total no longer matches
-  await pool.query(`UPDATE ticker_days SET mentions[$2] = NULL, ranks[$2] = NULL WHERE ticker = 'MSFT' AND day = $1`, [b.day, b.slot + 1]); // watchlist reading lost
   const audit = await auditRuns(pool);
-  assert.deepEqual(failing(audit).sort(), ['market-total', 'rows-saved', 'values-match', 'watchlist-complete']);
+  assert.deepEqual(failing(audit).sort(), ['market-total', 'rows-saved', 'values-match']);
   await collect(1);
   const c = await slotOfRun(1);
   await pool.query(
@@ -116,6 +115,6 @@ test('runs from before the storage migration are skipped with an explanation, bu
   const audit = await auditRuns(pool);
   assert.equal(audit.runsChecked, 2, 'the legacy run is not checked');
   assert.equal(audit.ok, true);
-  assert.match(audit.note, /1 early run\(s\) were stored in the earlier layout/);
+  assert.match(audit.note, /1 early run\(s\) were stored in an earlier layout/);
   assert.equal(audit.cadence.gapsOver45Min, 1, 'but its absence from the cadence is visible');
 });

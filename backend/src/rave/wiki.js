@@ -40,7 +40,7 @@ async function getJson(url, { fetchImpl = fetch, retries = 4, timeoutMs = 20000,
 // ---------- 1. which article? ----------
 const SUFFIXES = /[\s,]+(inc\.?|incorporated|corp\.?|corporation|co\.?|company|ltd\.?|limited|plc|llc|l\.p\.|lp|n\.v\.|nv|s\.a\.|sa|ag|se|holdings?|holding|class [a-c]|common stock|ordinary shares?|adr|ads|depositary shares?)\b\.?/gi;
 
-const decodeEntities = (t) => t.replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#0?39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+const { decodeEntities } = require('./text');
 
 // Titles to try, most specific first. Wikipedia titles for companies vary ("Tesla, Inc.", "Apple Inc.", "Micron Technology").
 // ApeWisdom names can carry HTML entities ("S&amp;P"), parentheticals ("Meta Platforms (Facebook)") and fund-family

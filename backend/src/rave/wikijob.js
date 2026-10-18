@@ -1,5 +1,5 @@
 // The scheduled Wikipedia job: resolve articles for newly tracked tickers, then top up daily views for every article.
-const { TRACKED_SQL, TRACK_MIN_PEAK } = require('./tracked');
+const { listStocks } = require('./tracked');
 const wiki = require('./wiki');
 
 const RERESOLVE_AFTER_DAYS = 7; // unresolved tickers are retried weekly (the name may improve, or Wikipedia may gain a page)
@@ -7,7 +7,7 @@ const RERESOLVE_AFTER_DAYS = 7; // unresolved tickers are retried weekly (the na
 async function runWikipedia(pool, { log = console, deadlineMs = 8 * 60 * 1000, pauseMs = 300, fetchImpl = fetch, now = Date.now() } = {}) {
   const started = Date.now();
   const opts = { fetchImpl, pauseMs };
-  const { rows: tracked } = await pool.query(TRACKED_SQL, [TRACK_MIN_PEAK]);
+  const tracked = await listStocks(pool); // one entry per company (share classes merged)
   const details = { tracked: tracked.length, newlyResolved: 0, unresolved: 0, articlesFetched: 0, daysAdded: 0, errors: [], partial: false };
 
   // 1. which article is each ticker's company?
@@ -18,7 +18,8 @@ async function runWikipedia(pool, { log = console, deadlineMs = 8 * 60 * 1000, p
     const m = byTicker.get(t.ticker);
     return !m || (m.source === 'auto' && m.status !== 'resolved' && new Date(m.checked_at).getTime() < cutoff);
   });
-  for (let i = 0; i < toResolve.length && Date.now() - started < deadlineMs; i += 20) {
+  for (let i = 0; i < toResolve.length; i += 20) {
+    if (Date.now() - started > deadlineMs) { details.partial = true; break; }
     const chunk = toResolve.slice(i, i + 20);
     const results = await wiki.resolveArticles(chunk.map((t) => ({ ticker: t.ticker, name: t.name })), opts);
     for (const r of results) {
@@ -57,10 +58,11 @@ async function runWikipedia(pool, { log = console, deadlineMs = 8 * 60 * 1000, p
     }
   }
   details.unresolved = tracked.filter((t) => !byTicker.get(t.ticker) || byTicker.get(t.ticker).status !== 'resolved').length - details.newlyResolved;
+  details.errorCount = details.errors.length;
   details.errors = details.errors.slice(0, 10);
   // Mostly failing means the source is unhealthy: record the run as failed so it retries and the Data page shows why
-  if (attempted >= 3 && details.errors.length >= Math.max(3, attempted * 0.5)) {
-    throw new Error(`Wikipedia page views failing for ${details.errors.length} of ${attempted} articles, e.g. ${details.errors[0]}`);
+  if (attempted >= 2 && details.errorCount >= Math.max(2, attempted * 0.5)) {
+    throw new Error(`Wikipedia page views failing for ${details.errorCount} of ${attempted} articles, e.g. ${details.errors[0]}`);
   }
   return details;
 }

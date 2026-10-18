@@ -37,8 +37,8 @@ test('a quiet stock is rated Quiet and the explanation carries the numbers', () 
   const s = scoreStock(simulate({ days: 40, seed: 5 }), { ticker: 'GME' });
   assert.equal(s.short.status, 'ok');
   assert.equal(s.short.label, 'Quiet');
-  assert.match(s.short.explanation, /^GME: [\d.,]+× normal over the last 24 hours/);
-  assert.match(s.short.explanation, /robust standard deviations/);
+  assert.match(s.short.explanation, /^GME: [\d.,]+× its normal level over the last 24 hours/);
+  assert.match(s.short.explanation, /(within its normal ups and downs|a little unusual|unusual|very unusual)/);
   assert.match(s.short.explanation, /Label: Quiet\./);
   assert.match(s.short.explanation, /Rank #5 \(was #6 a day ago\)/);
 });

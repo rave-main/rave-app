@@ -31,8 +31,8 @@ function buildJobs() {
     },
     {
       kind: 'prices',
-      label: 'Stock prices (Yahoo, Stooq fallback)',
-      cadence: 'twice a day, 12:30 and 22:30 UTC (the US market closes at 20:00-21:00 UTC); history backfilled 5 years',
+      label: 'Share prices (Yahoo Finance)',
+      cadence: 'twice a day, 12:30 and 22:30 UTC (the US market closes at 20:00-21:00 UTC); history backfilled 2 years',
       times: ['12:30', '22:30'],
       staleAfterMs: 30 * 60 * 60 * 1000,
       run: (pool, ctx) => runPrices(pool, ctx),

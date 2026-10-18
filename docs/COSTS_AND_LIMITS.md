@@ -2,18 +2,19 @@
 
 | Service | Plan / limit | Cost now | What to watch |
 |---|---|---|---|
-| Railway (backend + Postgres) | Hobby **trial: 30 days or $5 credit** (workspace reports 30 days left, $4.996 credit left); Postgres volume **500 MB** | measured about **$2.2 a month** (spend rose $0.00042 in 8.3 minutes) | The trial ends about 17 Nov 2026. After that the Hobby plan is $5 a month and includes $5 of usage, so expect about $5 a month total. If the trial ends without a paid plan the services stop and collection stops (a gap in the history). Volume: 84 MB used, grows about 450 MB a year, see docs/DATA_PIPELINE.md section 6. |
-| Vercel (frontend + /api proxy) | Hobby, free, for personal non-commercial use | $0 | Far below the free quotas (a browser tab makes about 3 requests a minute). Commercial use needs a paid plan. |
+| Railway (backend + Postgres) | Hobby **trial: 30 days or $5 credit**; Postgres volume **500 MB** | measured about **$2.2 a month** | **The trial ends about 17 Nov 2026.** After that the Hobby plan is $5 a month (includes $5 of usage), so expect about $5 a month. If the trial ends without a paid plan the services stop and collection stops (a gap in the history). |
+| Vercel (frontend + /api proxy) | Hobby, free, personal non-commercial use | $0 | Far below the free quotas. Commercial use needs a paid plan. |
 | GitHub (repo, CI) | public repo | $0 | Actions minutes are free for public repos. |
-| ApeWisdom | free, no key, no documented rate limit, no uptime promise, run by a small company | $0 | RAVE makes 9 requests every ~30 minutes (about 430 a day). The source scans only twice an hour, so fetching more often gains nothing. It is unofficial in the sense of having no guarantee: it could change or disappear. |
-| Price data (milestone 3, not built) | Yahoo chart endpoint / Stooq, free and unofficial | $0 | Unverified, to be tested before relying on it. |
+| ApeWisdom | free, no key, no uptime promise | $0 | 9 requests every 30 minutes (about 430 a day). It could change or disappear. |
+| Wikipedia / Wikimedia | free, no key, needs a descriptive user agent | $0 | About one request per stock per run during the first backfill, then one per stock per day. |
+| Yahoo Finance prices | free, unofficial, the ONLY price source | $0 | About one request per stock per run, spaced 400 ms. Yahoo can throttle or change without notice; if it fails, price data stops updating (the Data page shows it). A stock Yahoo rejects is retried every 3 days. |
 
-Adding stocks costs nothing on the collection side: every run already downloads all ~820 tickers. Each extra
-watchlist stock adds 48 rows a day (about 12 KB a day, 4 MB a year) unless it is already in the stored top 100.
-Price data adds a few requests per stock per day.
+## Storage (500 MB volume)
+- Reddit data for all ~820 stocks: about 220 MB a year.
+- Prices: 2 years for ~820 stocks, about 40 MB. Wikipedia views: a few MB. Raw API pages (7 days): about 26 MB.
+- So the volume lasts a little over a year with everything on. The Data page shows usage. If it gets tight: a bigger volume,
+  or roll old Reddit readings up to hourly.
 
-## Update 2026-10-18 (v2)
-- All ~820 tickers are stored in about 220 MB a year (less than the 450 MB a year the first layout needed for 103 tickers).
-  Wikipedia months and prices add a few MB. The 500 MB volume lasts roughly two years; the Data page shows usage.
-- Wikimedia and Yahoo are free and need no keys. Yahoo is unofficial and could change or throttle; Stooq is blocked from Railway.
-- The Railway trial ends about 17 Nov 2026; after that Hobby is $5/month (usage measured about $2.2/month).
+## Adding stocks
+Costs nothing on the Reddit side (every run already downloads the whole leaderboard). Each stock adds about one price request
+and one Wikipedia request per day.

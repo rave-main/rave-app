@@ -136,10 +136,24 @@ met after repeated attempts; results show no signal.
   research 05:15/23:15. No 10-minute scraping.
 - Wikipedia page views supplement (never replace) Reddit: automatic article matching (editable in Settings), 5-year backfill,
   same scoring rule, agreement marker when both signals spike.
-- Prices: Yahoo (Stooq is blocked from Railway), 5 years, SPY benchmark.
+- Prices: Yahoo Finance only (a second price source was blocked from Railway and later removed), SPY benchmark.
 - Hypothesis tests (`validation.js`, `research.js`): event study with placebo-shift null, volatility-matched control, lead-lag,
   verdict levels. The engine was checked on synthetic worlds with known truth; two biases were found and fixed (control
   exclusion; volatility clustering misread as prediction -> "marker" verdict). Reddit is tested forward through a ledger.
 - UI: Radar (Wikipedia column, groups, agreement), Stock (Reddit + Wikipedia + price, article editor, past spikes),
   Research, Settings (watchlist, article mapping, Slack placeholder), Data (per-source table with Run now).
 - 115 backend tests pass against real Postgres.
+
+### 2026-10-18 Release 3: all stocks, plain language, money, one row per company (user review feedback)
+- User feedback implemented: track all ~820 leaderboard stocks (watchlist and controls removed; migration 8 drops the table);
+  GOOGL / GOOG shown as one row (`share-classes.js`); names decoded ("S&amp;P" -> "S&P", plus fund-family prefixes dropped);
+  Radar shows the ticker only so the whole table fits, with price (US$) and 5-day change columns; Stooq removed (Yahoo only);
+  prices backfilled 2 years instead of 5 (storage); plain British English everywhere, short explainers, axis titles with units
+  and periods on every chart; Research page rewritten simply (what happened after a spike, gain or loss vs market, $ per $1,000,
+  "could it be luck?"), technical detail folded away.
+- Scheduler: a job that stops at its time limit (`details.partial`) continues 5 minutes later, so the first Wikipedia and price
+  backfills for ~820 stocks finish within an hour or two instead of days. A ticker Yahoo rejects is retried every 3 days, and a
+  run only fails if Yahoo itself is failing (10 failures in a row, or nothing fetched).
+- Found while changing it: the Wikipedia job's "mostly failing" check counted a list that was capped at 10, so it could never
+  trigger at scale. Fixed (`errorCount`).
+- Added `docs/HANDOVER.md`: read it first in a new session.

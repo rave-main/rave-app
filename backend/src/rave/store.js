@@ -22,7 +22,7 @@ function slotOf(date) {
 const pointTime = (day, slot) => Date.parse(`${day}T00:00:00Z`) + slot * SLOT_MS;
 
 // Writes one collection run. `rows` are parsed leaderboard rows; `listed` is every ticker on the leaderboard.
-async function storeRun(client, { startedAt, rows, marketTotal, watchlist }) {
+async function storeRun(client, { startedAt, rows, marketTotal }) {
   const { day, slot } = slotOf(startedAt);
   const pos = slot + 1; // Postgres arrays are 1-based
 
@@ -34,8 +34,6 @@ async function storeRun(client, { startedAt, rows, marketTotal, watchlist }) {
   await client.query('UPDATE market_days SET market[$2] = $3, tickers[$2] = $4 WHERE day = $1', [day, pos, marketTotal, rows.length]);
 
   const listed = rows.map((r) => r.ticker);
-  const have = new Set(listed);
-  const ensure = [...listed, ...watchlist.filter((t) => !have.has(t))];
 
   // New ticker-day rows start as 0 for every slot a collection already ran in today, NULL for the others
   await client.query(
@@ -45,7 +43,7 @@ async function storeRun(client, { startedAt, rows, marketTotal, watchlist }) {
             array_fill(NULL::smallint, ARRAY[${SLOTS}])
      FROM unnest($1::text[]) AS e(tk) CROSS JOIN market_days md WHERE md.day = $2
      ON CONFLICT DO NOTHING`,
-    [ensure, day]
+    [listed, day]
   );
   await client.query(
     `UPDATE ticker_days td SET mentions[$3] = v.m, ranks[$3] = v.r
@@ -75,15 +73,6 @@ async function storeRun(client, { startedAt, rows, marketTotal, watchlist }) {
      WHERE NOT (ticker = ANY($2::text[]))`,
     [startedAt, listed]
   );
-  // Watchlist stocks that have never been on the leaderboard still need a row in `tickers`
-  const missing = watchlist.filter((t) => !have.has(t));
-  if (missing.length) {
-    await client.query(
-      `INSERT INTO tickers (ticker, name, first_seen, last_seen, fetched_at, ranked, mentions)
-       SELECT w.ticker, w.name, $1, $1, $1, false, 0 FROM watchlist w WHERE w.ticker = ANY($2::text[]) ON CONFLICT DO NOTHING`,
-      [startedAt, missing]
-    );
-  }
   return { day, slot };
 }
 
