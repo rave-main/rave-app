@@ -216,6 +216,9 @@ test('stocks include the wiki signal and an agreement flag; the single-stock end
   const gme = body.find((s) => s.ticker === 'GME');
   assert.equal(gme.wiki.article, 'GameStop');
   assert.equal(gme.wiki.scores.short.status, 'ok');
+  assert.equal(gme.wiki.views.now, 1000 + (58 % 7) * 20, 'latest full day of page views');
+  assert.equal(gme.wiki.views.before, 1000 + (57 % 7) * 20);
+  assert.equal(gme.kind, 'company');
   assert.match(['none', 'reddit', 'wiki', 'both'].join(), new RegExp(gme.agreement));
   assert.equal(body.find((s) => s.ticker === 'GME').wiki.status, 'resolved');
   const one = await agent.get('/api/rave/stocks/GME').expect(200);

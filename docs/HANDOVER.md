@@ -2,6 +2,8 @@
 
 For a new Claude session (or person) picking this up. Last updated 2026-10-18.
 
+**Next steps are in [TODO.md](TODO.md).**
+
 ## What RAVE is
 **RAVE = Retail Attention Volatility Engine.** It tracks how much small investors talk about every US stock on Reddit
 (via ApeWisdom) and how many people view each company's Wikipedia page, flags unusual surges with an explainable score, shows

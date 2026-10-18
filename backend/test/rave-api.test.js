@@ -133,3 +133,13 @@ test('status history comes from the day arrays', async () => {
   assert.ok(body.history.snapshots > 90, `${body.history.snapshots} readings`);
   assert.ok(new Date(body.history.firstSnapshotAt).getTime() < Date.now() - 24 * 3600000);
 });
+
+test('stocks are told apart: companies, funds and tickers that are ordinary words', () => {
+  const { stockKind } = require('../src/rave/stock-kind');
+  assert.equal(stockKind('GME', 'GameStop'), 'company');
+  assert.equal(stockKind('VOO', 'Vanguard S&P 500 ETF'), 'etf');
+  assert.equal(stockKind('SOXL', 'Direxion Daily Semiconductor Bull 3X Shares'), 'etf');
+  assert.equal(stockKind('USO', 'United States Oil Fund'), 'etf');
+  assert.equal(stockKind('IT', 'Gartner'), 'ambiguous');
+  assert.equal(stockKind('ALL', 'Allstate'), 'ambiguous');
+});

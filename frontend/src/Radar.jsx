@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import Sparkline from './Sparkline.jsx';
 import { Explain, dateTime, num, pct, signedPct, times, unusual, usd, usePoll, useStatus, useTick } from './lib.jsx';
@@ -7,6 +7,18 @@ const ORDER = { Extreme: 3, Hot: 2, Rising: 1, Quiet: 0 }; // anything else (War
 const HORIZONS = [['short', 'Last 24 hours'], ['medium', 'Last 7 days'], ['long', 'Last 4 weeks']];
 const LABELS = ['Extreme', 'Hot', 'Rising', 'Quiet', 'Low volume', 'Warming up'];
 
+// Starred stocks live in this browser only
+function useStars() {
+  const read = () => { try { return JSON.parse(localStorage.getItem('rave-stars') || '[]'); } catch { return []; } };
+  const [stars, setStars] = useState(read);
+  const toggle = useCallback((t) => setStars((cur) => {
+    const next = cur.includes(t) ? cur.filter((x) => x !== t) : [...cur, t];
+    try { localStorage.setItem('rave-stars', JSON.stringify(next)); } catch { /* private mode: stars last for this visit only */ }
+    return next;
+  }), []);
+  return [stars, toggle];
+}
+
 export const LabelChip = ({ label }) => <span className={`chip ${label.toLowerCase().replace(' ', '-')}`}>{label}</span>;
 
 const sortValue = {
@@ -14,6 +26,8 @@ const sortValue = {
   label: (r, h) => ORDER[r.scores[h].label] ?? -1,
   mentions: (r) => r.mentions,
   dod: (r) => r.dayOverDay?.ratio ?? -1,
+  wikiviews: (r) => r.wiki?.views?.now ?? -1,
+  wikichg: (r) => (r.wiki?.views && r.wiki.views.before > 0 ? r.wiki.views.now / r.wiki.views.before : -1),
   ratio: (r, h) => r.scores[h].adjusted?.ratio ?? r.scores[h].raw?.ratio ?? -1,
   rank: (r) => (r.ranked ? -r.rank : -Infinity), // a better (smaller) rank sorts higher
   wiki: (r, h) => ORDER[r.wiki?.scores?.[h]?.label] ?? -1,
@@ -21,18 +35,36 @@ const sortValue = {
   week: (r) => r.price?.change1w ?? -Infinity,
 };
 
-// Wikipedia page-view signal for one stock at the chosen horizon
+const change = (now, before) => {
+  if (now === null || now === undefined || before === null || before === undefined) return null;
+  const d = now - before;
+  return { d, p: before > 0 ? d / before : null };
+};
+const Change = ({ c }) => (c ? <small className={c.d > 0 ? 'up' : c.d < 0 ? 'down' : ''}> {c.d > 0 ? '+' : c.d < 0 ? '−' : ''}{num(Math.abs(c.d))}{c.p === null ? ' new' : ` (${c.p > 0 ? '+' : c.p < 0 ? '−' : ''}${Math.round(Math.abs(c.p) * 100)}%)`}</small> : null);
+
+// One cell per source: label, the measure now, and the change since the comparison point, e.g. "Hot 60 −10 (−14%)"
+function RedditCell({ r, horizon }) {
+  const s = r.scores[horizon];
+  const c = r.dayOverDay ? change(r.mentions, r.mentions24hAgo) : null;
+  return (
+    <span className="src-cell" title={`Reddit: ${s.explanation}`}>
+      <LabelChip label={s.label} />{s.unconfirmed && <small title="Waiting for the next reading to confirm"> unconfirmed</small>}
+      {r.fetchedAt && <strong className="measure">{r.ranked ? num(r.mentions) : 0}</strong>}<Change c={c} />
+    </span>
+  );
+}
+
 function WikiCell({ r, horizon }) {
   const w = r.wiki;
   if (!w || !w.article) {
-    return <span className="muted" title={w?.status === 'pending' ? 'Still looking for this company\'s Wikipedia article' : 'No Wikipedia article found (you can set one in Settings)'}>{w?.status === 'pending' ? '…' : 'none'}</span>;
+    return <span className="muted" title={w?.status === 'pending' ? 'Still looking for this company\'s Wikipedia page' : 'No Wikipedia page found (you can set one in Settings)'}>{w?.status === 'pending' ? '…' : 'none'}</span>;
   }
   const s = w.scores?.[horizon];
   if (!s) return <span className="muted">…</span>;
-  const m = s.adjusted || s.raw;
+  const c = w.views ? change(w.views.now, w.views.before) : null;
   return (
-    <span title={`${w.article}: ${s.explanation}`}>
-      <LabelChip label={s.label} />{m && s.status === 'ok' && s.label !== 'Quiet' && s.label !== 'Low volume' ? <small> {times(m.ratio)}</small> : null}
+    <span className="src-cell" title={`${w.article}: ${s.explanation}`}>
+      <LabelChip label={s.label} />{w.views && <strong className="measure">{num(w.views.now)}</strong>}<Change c={c} />
     </span>
   );
 }
@@ -51,9 +83,13 @@ export default function Radar() {
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
   const [shown, setShown] = useState(100);
+  const [stars, toggleStar] = useStars();
 
   const horizon = params.get('h') || 'short';
-  const labelFilter = params.get('label') || 'all';
+  const redditFilter = params.get('rl') || 'all';
+  const wikiFilter = params.get('wl') || 'all';
+  const kindFilter = params.get('kind') || 'all';
+  const starredOnly = params.get('starred') === '1';
   const q = params.get('q') || '';
   const sort = params.get('sort') || 'label';
   const dir = params.get('dir') || 'desc';
@@ -68,7 +104,10 @@ export default function Radar() {
     if (!stocks) return [];
     const needle = q.trim().toLowerCase();
     const list = stocks.filter((r) =>
-      (labelFilter === 'all' || r.scores[horizon].label === labelFilter) &&
+      (kindFilter === 'all' || (kindFilter === 'company' ? r.kind !== 'etf' : r.kind === 'etf')) &&
+      (!starredOnly || stars.includes(r.ticker)) &&
+      (redditFilter === 'all' || r.scores[horizon].label === redditFilter) &&
+      (wikiFilter === 'all' || (r.wiki?.scores?.[horizon]?.label ?? 'No page') === wikiFilter) &&
       (!needle || r.tickers.some((t) => t.toLowerCase().includes(needle)) || r.name.toLowerCase().includes(needle))
     );
     const val = sortValue[sort] || sortValue.label;
@@ -77,12 +116,27 @@ export default function Radar() {
       const c = typeof x === 'string' ? x.localeCompare(y) : x - y;
       return (dir === 'asc' ? c : -c) || b.mentions - a.mentions;
     });
-  }, [stocks, horizon, labelFilter, q, sort, dir]);
+  }, [stocks, horizon, redditFilter, wikiFilter, kindFilter, starredOnly, stars, q, sort, dir]);
+
+  const counts = useMemo(() => {
+    const red = {}, wik = {};
+    for (const r of stocks || []) {
+      const a = r.scores[horizon].label; red[a] = (red[a] || 0) + 1;
+      const b = r.wiki?.scores?.[horizon]?.label ?? 'No page'; wik[b] = (wik[b] || 0) + 1;
+    }
+    return { red, wik };
+  }, [stocks, horizon]);
 
   const movers = useMemo(() => (stocks || [])
     .filter((r) => r.dayOverDay && Math.max(r.mentions, r.mentions24hAgo) >= 5)
     .sort((a, b) => Math.abs(b.dayOverDay.change) - Math.abs(a.dayOverDay.change))
     .slice(0, 3), [stocks]);
+
+  const context = useMemo(() => {
+    const ratios = (stocks || []).map((r) => r.scores.short.market?.ratio).filter((x) => x !== null && x !== undefined).sort((a, b) => a - b);
+    return ratios.length ? ratios[Math.floor(ratios.length / 2)] : null;
+  }, [stocks]);
+  const top = useMemo(() => [...(stocks || [])].sort((a, b) => b.mentions - a.mentions).slice(0, 10), [stocks]);
 
   const sortBy = (key) => set(sort === key ? { dir: dir === 'desc' ? 'asc' : 'desc' } : { sort: key, dir: key === 'ticker' ? 'asc' : 'desc' });
   const th = (key, text, cls = '', hint) => (
@@ -106,13 +160,27 @@ export default function Radar() {
       </p>
       <Explain title="How to read this page">
         <ul>
-          <li><strong>Mentions</strong> are the number of Reddit posts and comments that name the stock in the last 24 hours.</li>
+          <li>Each cell reads like <strong>Hot 60 −10 (−14%)</strong>: the rating, then the count now (Reddit: mentions in the last 24 hours; Wikipedia: page views on the latest full day), then the change since 24 hours (Reddit) or a day (Wikipedia) earlier.</li>
           <li><strong>Times normal</strong> compares attention with what is usual for that stock. 1× is normal, 3× is three times as much.</li>
           <li><strong>Rising, Hot, Extreme</strong> mean attention is unusually high (Extreme is the most). <strong>Quiet</strong> means normal. <strong>Low volume</strong> means the stock is rarely mentioned, so a jump could be chance and it is not rated.</li>
           <li><strong>Wikipedia</strong> is the same idea using daily views of the company's Wikipedia page. It is about a day behind. <span className="both">●●</span> means Reddit and Wikipedia both show a jump.</li>
           <li>Prices are in US dollars. This is research, not investment advice.</li>
         </ul>
       </Explain>
+
+      {context !== null && (
+        <p className="context">Reddit stock chatter overall is <strong>{times(context)}</strong> its usual level{context >= 1.3 ? ' (busier than normal)' : context <= 0.75 ? ' (quieter than normal)' : ' (about normal)'}.</p>
+      )}
+      <section className="top10" aria-label="Most talked about right now">
+        <h2>Most talked about right now <small>Reddit mentions in the last 24 hours</small></h2>
+        <div className="mover-row">
+          {top.map((r) => (
+            <Link key={r.ticker} to={`/stock/${r.ticker}`} className="mover" title={r.name}>
+              <strong>{r.label}</strong><small>{num(r.mentions)} mentions</small><LabelChip label={r.scores[horizon].label} />
+            </Link>
+          ))}
+        </div>
+      </section>
 
       {movers.length > 0 && (
         <section className="movers" aria-label="Biggest changes in mentions since yesterday">
@@ -136,18 +204,39 @@ export default function Radar() {
               <button key={k} role="tab" aria-selected={horizon === k} className={horizon === k ? 'on' : ''} onClick={() => set({ h: k === 'short' ? null : k })}>{text}</button>
             ))}
           </div>
-          <select value={labelFilter} onChange={(e) => set({ label: e.target.value })} aria-label="Show only stocks with this label">
-            <option value="all">Any label</option>
-            {LABELS.map((l) => <option key={l}>{l}</option>)}
-          </select>
+          <label className="filter">Show
+            <select value={kindFilter} onChange={(e) => set({ kind: e.target.value })} aria-label="Companies or funds">
+              <option value="all">All</option><option value="company">Companies</option><option value="etf">Funds (ETFs)</option>
+            </select>
+          </label>
+          <button type="button" className={`star-filter ${starredOnly ? 'on' : ''}`} onClick={() => set({ starred: starredOnly ? null : '1' })} aria-pressed={starredOnly}>★ Starred ({stars.length})</button>
+          <label className="filter">Reddit
+            <select value={redditFilter} onChange={(e) => set({ rl: e.target.value })} aria-label="Show only stocks with this Reddit label">
+              <option value="all">Any ({stocks.length})</option>
+              {LABELS.map((l) => <option key={l} value={l}>{l} ({counts.red[l] || 0})</option>)}
+            </select>
+          </label>
+          <label className="filter">Wikipedia
+            <select value={wikiFilter} onChange={(e) => set({ wl: e.target.value })} aria-label="Show only stocks with this Wikipedia label">
+              <option value="all">Any ({stocks.length})</option>
+              {[...LABELS, 'No page'].map((l) => <option key={l} value={l}>{l} ({counts.wik[l] || 0})</option>)}
+            </select>
+          </label>
+          <label className="filter">Sort by
+            <select value={`${sort}`} onChange={(e) => set({ sort: e.target.value, dir: e.target.value === 'ticker' ? 'asc' : 'desc' })} aria-label="Sort the table by">
+              <option value="label">Reddit rating</option><option value="mentions">Reddit mentions</option><option value="dod">Reddit change %</option>
+              <option value="wiki">Wikipedia rating</option><option value="wikiviews">Wikipedia views</option><option value="wikichg">Wikipedia change %</option>
+              <option value="ratio">Times normal</option><option value="price">Price</option><option value="week">5-day price change</option><option value="rank">Reddit rank</option><option value="ticker">Ticker A to Z</option>
+            </select>
+          </label>
           <input className="search" type="search" placeholder="Search ticker or name" value={q} onChange={(e) => set({ q: e.target.value })} />
         </div>
 
         {warming && (
           <p className="banner info">
             RAVE is still collecting history{since ? <> (since {dateTime(since)})</> : ''}.
-            The <strong>{horizonName}</strong> rating needs {horizon === 'short' ? 'about 3 days' : horizon === 'medium' ? 'about 5 weeks' : 'about 8 weeks'} of data. Until then, use the
-            <em> Mentions</em> and <em>Change</em> columns, which come straight from the source (ApeWisdom).
+            The <strong>{horizonName}</strong> rating needs {horizon === 'short' ? 'about 3 days' : horizon === 'medium' ? 'about 5 weeks' : 'about 8 weeks'} of data. Until then, the number and change in each cell
+            come straight from the source (ApeWisdom for Reddit).
           </p>
         )}
 
@@ -156,10 +245,8 @@ export default function Radar() {
             <thead>
               <tr>
                 {th('ticker', 'Stock', '', 'Stock ticker. Hover a ticker for the company name')}
-                {th('label', 'Reddit', '', `How unusual Reddit attention is, over the ${horizonName}`)}
-                {th('wiki', 'Wikipedia', '', `How unusual Wikipedia page views are, over the ${horizonName}`)}
-                {th('mentions', 'Mentions', 'num', 'Reddit posts and comments naming the stock in the last 24 hours')}
-                {th('dod', 'Change', 'num hide-sm', 'Mentions now compared with 24 hours ago')}
+                {th('label', <>Reddit<small className="sub">rating · mentions 24h · change</small></>, '', `Rating over the ${horizonName}, then the number of Reddit mentions in the last 24 hours and the change since 24 hours ago`)}
+                {th('wiki', <>Wikipedia<small className="sub">rating · views a day · change</small></>, '', `Rating over the ${horizonName}, then Wikipedia page views on the latest full day and the change since the day before`)}
                 {th('ratio', 'Times normal', 'num hide-sm', "Reddit attention compared with this stock's own usual level (1× = normal)")}
                 {th('price', 'Price (US$)', 'num', 'Latest closing price in US dollars')}
                 {th('week', '5-day change', 'num hide-sm', 'Change in the share price over the last 5 trading days')}
@@ -174,12 +261,10 @@ export default function Radar() {
                 const chg = r.price?.change1w;
                 return (
                   <tr key={r.ticker} onClick={() => navigate(`/stock/${r.ticker}`)} tabIndex={0} onKeyDown={(e) => e.key === 'Enter' && navigate(`/stock/${r.ticker}`)}>
-                    <td><Link to={`/stock/${r.ticker}`} onClick={(e) => e.stopPropagation()} className="tk" title={r.name}><strong>{r.label}</strong></Link></td>
-                    <td><LabelChip label={s.label} />{s.unconfirmed && <small title="Waiting for the next reading to confirm"> unconfirmed</small>}{horizon === 'short' && r.agreement === 'both' && <span className="both" title="Reddit AND Wikipedia both show a jump">●●</span>}</td>
+                    <td><button type="button" className={`star ${stars.includes(r.ticker) ? 'on' : ''}`} aria-label={`${stars.includes(r.ticker) ? 'Unstar' : 'Star'} ${r.label}`} onClick={(e) => { e.stopPropagation(); toggleStar(r.ticker); }}>{stars.includes(r.ticker) ? '★' : '☆'}</button><Link to={`/stock/${r.ticker}`} onClick={(e) => e.stopPropagation()} className="tk" title={r.name}><strong>{r.label}</strong></Link>{r.kind === 'etf' && <small className="kind" title="A fund, not a single company"> fund</small>}{r.kind === 'ambiguous' && <small className="kind" title="This ticker is also an ordinary word, so some mentions may not be about the stock"> ⚠</small>}</td>
+                    <td><RedditCell r={r} horizon={horizon} />{horizon === 'short' && r.agreement === 'both' && <span className="both" title="Reddit AND Wikipedia both show a jump">●●</span>}</td>
                     <td><WikiCell r={r} horizon={horizon} /></td>
-                    <td className="num">{r.fetchedAt ? (r.ranked ? num(r.mentions) : <span className="muted" title="Not on the Reddit leaderboard">0</span>) : '—'}</td>
-                    <td className="num hide-sm">{r.dayOverDay ? <>{r.dayOverDay.change > 0 ? '+' : ''}{r.dayOverDay.change}{r.dayOverDay.ratio ? <small> {pct(r.dayOverDay.ratio)}</small> : <small> new</small>}</> : '—'}</td>
-                    <td className="num hide-sm" title={s.explanation}>{s.label === 'Low volume' ? <span className="muted" title="Too few mentions to rate">—</span> : m ? <>{times(m.ratio)}<small> {unusual(m.z)}</small></> : <span className="muted">warming up</span>}</td>
+                    <td className="num hide-sm" title={s.explanation}>{s.label === 'Low volume' ? <span className="muted" title="Too few mentions to rate">—</span> : m ? <>{times(m.ratio)}</> : <span className="muted">warming up</span>}</td>
                     <td className="num">{r.price ? usd(r.price.close) : <span className="muted">—</span>}</td>
                     <td className={`num hide-sm ${chg > 0 ? 'up' : chg < 0 ? 'down' : ''}`}>{r.price ? signedPct(chg) : <span className="muted">—</span>}</td>
                     <td className="num hide-sm">{r.ranked ? <>#{r.rank} <RankMove now={r.rank} before={r.rank24hAgo} /></> : <span className="muted">—</span>}</td>
@@ -187,7 +272,7 @@ export default function Radar() {
                   </tr>
                 );
               })}
-              {!rows.length && <tr><td colSpan="10" className="muted center">No stocks match these filters.</td></tr>}
+              {!rows.length && <tr><td colSpan="8" className="muted center">No stocks match these filters.</td></tr>}
             </tbody>
           </table>
         </div>

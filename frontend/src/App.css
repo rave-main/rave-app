@@ -217,3 +217,15 @@ h3 { font-size: 1rem; margin: 20px 0 8px; }
 .tabs { overflow-x: auto; scrollbar-width: none; }
 .tabs a { white-space: nowrap; padding: 8px 10px; }
 @media (min-width: 640px) { .tabs a { padding: 8px 14px; } }
+
+/* radar cells and filters */
+.src-cell { display: inline-flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+.src-cell .measure { font-variant-numeric: tabular-nums; }
+.src-cell small { font-variant-numeric: tabular-nums; }
+.filter { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 0.82rem; }
+.context { margin: 10px 0 0; font-size: 0.9rem; color: var(--muted); }
+.top10 { margin-top: 14px; } .top10 h2 { font-size: 1rem; margin: 0 0 8px; } .top10 h2 small { color: var(--muted); font-weight: 400; font-size: 0.8rem; }
+.star { background: none; border: 0; color: var(--muted); padding: 0 6px 0 0; font-size: 1rem; cursor: pointer; } .star.on { color: var(--warn); }
+.star-filter { background: none; border: 1px solid var(--border); color: var(--muted); border-radius: 8px; padding: 6px 10px; font-size: 0.82rem; } .star-filter.on { color: var(--warn); border-color: var(--warn); }
+.kind { color: var(--muted); }
+.sub { display: block; font-weight: 400; color: var(--muted); font-size: 0.7rem; text-transform: none; letter-spacing: 0; }

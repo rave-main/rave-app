@@ -12,6 +12,21 @@ const Stat = ({ title, value, sub, tone }) => (
   </div>
 );
 
+function WikiMatches() {
+  const { data } = usePoll('/rave/wiki', 300000);
+  if (!data) return null;
+  const matched = data.filter((w) => w.article).length;
+  const low = data.filter((w) => w.article && w.confidence === 'low').length;
+  const pending = data.filter((w) => !w.article && w.status === 'pending').length;
+  const none = data.length - matched - pending;
+  return (
+    <section className="stats">
+      <div className="stat"><span className="stat-title">Wikipedia pages matched</span><strong>{num(matched)} of {num(data.length)}</strong><small>{low ? `${low} with low confidence (check them in Settings)` : 'none with low confidence'}</small></div>
+      <div className="stat"><span className="stat-title">No Wikipedia page found</span><strong>{num(none)}</strong><small>mostly funds and very small companies{pending ? ` · ${pending} not looked up yet` : ''}</small></div>
+    </section>
+  );
+}
+
 function Sources() {
   const { data, reload } = usePoll('/rave/sources', 60000);
   const [busy, setBusy] = useState('');
@@ -98,6 +113,7 @@ export default function DataHealth() {
       </section>
 
       <Sources />
+      <WikiMatches />
 
       {status.lastRun?.status === 'failed' && (
         <p className="banner err">Latest run failed: {status.lastRun.error}. RAVE keeps the data it already has and tries again at the next check.</p>

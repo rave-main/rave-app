@@ -7,6 +7,7 @@ const { loadWikiSeries } = require('./wiki');
 const { loadPrices } = require('./prices');
 const { shareClassGroups } = require('./share-classes');
 const { displayName } = require('./text');
+const { stockKind } = require('./stock-kind');
 
 // every stock seen on the leaderboard in the last week
 const ALL_SQL = `
@@ -32,12 +33,12 @@ async function listStocks(pool) {
   const out = [];
   for (const r of rows) {
     const members = groups.get(r.ticker);
-    if (!members) { out.push({ ...r, name: displayName(r.name, r.ticker), tickers: [r.ticker], label: r.ticker }); continue; }
+    if (!members) { out.push({ ...r, name: displayName(r.name, r.ticker), kind: stockKind(r.ticker, r.name), tickers: [r.ticker], label: r.ticker }); continue; }
     if (members[0] !== r.ticker) continue; // only the main ticker produces the row
     const parts = members.map((t) => byTicker.get(t)).filter(Boolean);
     out.push({
       ...r,
-      name: displayName(r.name, r.ticker),
+      name: displayName(r.name, r.ticker), kind: stockKind(r.ticker, r.name),
       mentions: sum(parts.map((p) => p.mentions)), upvotes: sum(parts.map((p) => p.upvotes)),
       mentions24hAgo: parts.every((p) => p.mentions24hAgo === null) ? null : sum(parts.map((p) => p.mentions24hAgo)),
       ranked: parts.some((p) => p.ranked), rank: minOf(parts.map((p) => p.rank)),
@@ -99,7 +100,9 @@ async function scoredStocks(pool) {
     if (merged.length) Object.assign(merged[merged.length - 1], { rank24hAgo: r.rank24hAgo, mentions24hAgo: r.mentions24hAgo });
     const scores = scoreStock(merged, { ticker: r.ticker });
     const m = wikiOf.get(r.ticker);
-    const wikiScores = m?.article ? scoreStock(wseries.get(m.article) || [], { ticker: r.ticker, source: 'wiki' }) : null;
+    const wpts = m?.article ? wseries.get(m.article) || [] : [];
+    const wikiScores = m?.article ? scoreStock(wpts, { ticker: r.ticker, source: 'wiki' }) : null;
+    const views = wpts.length >= 2 ? { now: wpts[wpts.length - 1].mentions, before: wpts[wpts.length - 2].mentions, day: new Date(wpts[wpts.length - 1].t).toISOString().slice(0, 10) } : null;
     const redditUp = AT_LEAST_RISING.includes(scores.short.label);
     const wikiUp = Boolean(wikiScores) && AT_LEAST_RISING.includes(wikiScores.short.label);
     return {
@@ -108,7 +111,7 @@ async function scoredStocks(pool) {
       spark: merged.slice(-48).map((p) => p.mentions), // about the last 24 hours
       price: priceSummary(prices.get(r.ticker)),
       scores,
-      wiki: m ? { article: m.article, status: m.status, confidence: m.confidence, source: m.source, scores: wikiScores } : { article: null, status: 'pending', confidence: 'none', source: 'auto', scores: null },
+      wiki: m ? { article: m.article, status: m.status, confidence: m.confidence, source: m.source, scores: wikiScores, views } : { article: null, status: 'pending', confidence: 'none', source: 'auto', scores: null },
       // both signals agree when Reddit and Wikipedia are each at Rising or above (short horizon)
       agreement: redditUp && wikiUp ? 'both' : redditUp ? 'reddit' : wikiUp ? 'wiki' : 'none',
     };

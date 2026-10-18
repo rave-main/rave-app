@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { Area, AreaChart, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { Area, AreaChart, CartesianGrid, ComposedChart, Line, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { api } from './api.js';
 import { LabelChip } from './Radar.jsx';
 import { Explain, ago, dateTime, num, signedPct, signedUsd, times, unusual, usd, usePoll, useStatus, useTick } from './lib.jsx';
@@ -147,6 +147,7 @@ export default function Stock() {
                 <YAxis yAxisId="p" orientation="right" stroke="var(--muted)" tick={{ fontSize: 11 }} width={56} domain={['auto', 'auto']} tickFormatter={(v) => `$${Math.round(v)}`} label={axisLabel('Share price (US$)', { angle: 90, position: 'insideRight', offset: 4, style: { textAnchor: 'middle' } })} />
                 <Tooltip labelFormatter={(t) => new Date(t).toLocaleDateString()} contentStyle={tooltipStyle} labelStyle={{ color: 'var(--text)' }} formatter={(v, name) => [name === 'Share price (US$)' ? `$${Number(v).toFixed(2)}` : `${num(v)} views`, name]} />
                 <Area yAxisId="v" type="monotone" dataKey="views" name="Page views per day" stroke="var(--accent)" strokeWidth={1.5} fill="var(--accent)" fillOpacity={0.18} connectNulls dot={false} isAnimationActive={false} />
+                {spikes.map((sp) => <ReferenceLine key={sp.detectedAt} yAxisId="v" x={Date.parse(`${sp.detectedAt.slice(0, 10)}T00:00:00Z`)} stroke="var(--warn)" strokeDasharray="3 3" label={{ value: 'Reddit spike', fill: 'var(--warn)', fontSize: 10, position: 'insideTopLeft' }} />)}
                 <Line yAxisId="p" type="monotone" dataKey="close" name="Share price (US$)" stroke="var(--ok)" strokeWidth={1.6} connectNulls dot={false} isAnimationActive={false} />
               </ComposedChart>
             </ResponsiveContainer>
