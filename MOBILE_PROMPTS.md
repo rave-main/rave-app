@@ -3,25 +3,22 @@
 Copy-paste prompts for continuing work on rave-app from the Claude app on your phone.
 
 ## Deploy / redeploy
-> In rave-main/rave-app, follow SETUP.md to verify the backend `/health` endpoint and the frontend
+> In rave-main/rave-app, follow the Verify section of SETUP.md to check the frontend, backend and database
 > are live. Report any failing step with the exact error.
 
 ## Health check
-> Curl the production `/health`, `/api/users` and `/api/analytics` endpoints for rave-app and tell me
-> whether each returns 200 and valid JSON.
+> Curl https://rave-app-eight.vercel.app/api/health and the backend's `/health` for rave-app and tell me
+> whether each returns 200 and valid JSON, and whether the database check is ok.
 
 ## Add an endpoint
-> In rave-main/rave-app, add `DELETE /api/users/:id` to backend/server.js (404 if missing, 204 on success),
-> keep the same validation style, add a delete button in frontend/src/App.jsx, test locally, then commit and push.
+> In rave-main/rave-app, add a signed-in endpoint to the backend (follow backend/src/notes.js), with a migration
+> in backend/src/db.js if it needs a table, tests in backend/test, and UI in frontend/src. Run the tests, then push
+> to a branch and give me the Vercel preview URL.
 
-## Fix CORS
-> The rave-app frontend shows "API offline". Check that FRONTEND_ORIGIN on the backend matches the
-> Vercel URL and that VITE_API_URL points at the backend, and explain what to change.
-
-## Add persistence
-> Replace the in-memory users array in rave-app's backend with SQLite (better-sqlite3), seeded with the
-> same 3 users. Keep the API contract identical. Test, commit and push.
+## Fix "API offline"
+> The rave-app frontend shows "API offline". Check /api/health on the Vercel URL, the /api rewrite in
+> frontend/vercel.json, FRONTEND_ORIGIN and DATABASE_URL on Railway, and explain what to change.
 
 ## Security review
-> Run a security review of rave-main/rave-app's backend: CORS, rate limiting, input validation,
-> payload limits, headers. List issues by severity and fix anything high.
+> Run a security review of rave-main/rave-app's backend: authentication and sessions, CORS, rate limiting,
+> input validation, payload limits, headers. List issues by severity and fix anything high.

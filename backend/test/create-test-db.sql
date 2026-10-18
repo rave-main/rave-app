@@ -1,0 +1,1 @@
+CREATE DATABASE rave_test;

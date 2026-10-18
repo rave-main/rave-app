@@ -1,66 +1,54 @@
 # Setup & Deployment
 
-## 1. Push to GitHub
+Production runs on two services, both deploying automatically from `main`:
+
+| Part     | Host    | URL |
+|----------|---------|-----|
+| Frontend | Vercel project `rave-app` (root directory `frontend`) | https://rave-app-eight.vercel.app |
+| Backend  | Railway project `rave-app`, service `rave-app-backend` (root directory `/backend`) | https://rave-app-backend-production.up.railway.app |
+| Database | Railway project `rave-app`, service `Postgres` (private network only) | — |
+
+## Backend (Railway)
+
+Service variables on `rave-app-backend`:
+
+| Variable          | Value |
+|-------------------|-------|
+| `DATABASE_URL`    | `${{Postgres.DATABASE_URL}}` (reference to the Postgres service) |
+| `NODE_ENV`        | `production` (makes the session cookie `Secure`) |
+| `FRONTEND_ORIGIN` | `https://rave-app-eight.vercel.app,https://*-rave-ecf1.vercel.app` (production + previews) |
+| `TRUST_PROXY`     | Number of proxy hops in front of the app, so rate limits see the real client IP |
+
+Railway injects `PORT`. Migrations run on every start, so a deploy with a new migration upgrades the schema.
+
+To set up from scratch: create a project from the GitHub repo with root directory `/backend`, add a Postgres
+database (**+ New → Database → PostgreSQL**), set the variables above, and generate a domain under
+**Settings → Networking**.
+
+## Frontend (Vercel)
+
+The Vercel project is linked to `rave-main/rave-app` through the Vercel GitHub App, with root directory `frontend`.
+Pushes to `main` deploy to production; pushes to other branches get preview deployments.
+
+The frontend needs no environment variables. `frontend/vercel.json` rewrites `/api/*` to the Railway backend, so
+the browser only talks to the Vercel domain. If the backend URL changes, update that rewrite.
+
+## Verify
 
 ```bash
-gh auth login
-gh repo create rave-main/rave-app --private --source=. --remote=origin --push
+SITE=https://rave-app-eight.vercel.app
+curl $SITE/api/health                      # {"status":"ok","database":"ok",...}
+curl -i $SITE/api/auth/me                  # 401 when signed out
 ```
-(Or create an empty private repo named `rave-app` on github.com without a README, then
-`git remote add origin https://github.com/rave-main/rave-app.git && git push -u origin main`.)
-
-## 2. Deploy the backend (Railway)
-
-1. https://railway.com/new → **Deploy from GitHub repo** → `rave-main/rave-app`
-2. Service **Settings**:
-   - **Root Directory:** `/backend`
-   - **Start Command:** `npm start` (detected automatically)
-   - **Networking → Generate Domain**
-3. **Variables:** `FRONTEND_ORIGIN=http://localhost:5173` (this is updated in step 4)
-4. Deploy, then check `https://<your-service>.up.railway.app/health`
-
-CLI alternative (needs `RAILWAY_TOKEN`):
-```bash
-cd backend && npx @railway/cli up --service rave-app-backend
-```
-
-> Railway injects `PORT` automatically; the server uses it, falling back to 3000.
-
-## 3. Deploy the frontend (Vercel)
-
-1. https://vercel.com/new → import `rave-main/rave-app`
-2. **Root Directory:** `frontend` (Vercel detects Vite; `vercel.json` covers the rest)
-3. Environment variable: `VITE_API_URL=https://<your-service>.up.railway.app` (no trailing slash)
-4. Deploy and note the URL, for example `https://rave-app.vercel.app`
-
-CLI alternative:
-```bash
-cd frontend && npx vercel --prod -e VITE_API_URL=https://<your-service>.up.railway.app
-```
-
-Once the project is linked to the GitHub repo (Vercel GitHub App installed on `rave-main`), every push to `main`
-deploys to production automatically, and pushes to other branches get preview deployments.
-
-## 4. Lock CORS to the frontend
-
-On Railway, set `FRONTEND_ORIGIN=https://rave-app.vercel.app` (to allow several origins, separate them with commas,
-for example `https://rave-app.vercel.app,http://localhost:5173`) and redeploy.
-
-## 5. Verify
-
-```bash
-API=https://<your-service>.up.railway.app
-curl $API/health
-curl $API/api/users
-curl -X POST $API/api/users -H 'Content-Type: application/json' -d '{"name":"Test User","email":"test@example.com"}'
-```
-Open the Vercel URL. The status badge should read **API online** and show the users and analytics.
+Open the site, create an account, add a note, reload: the note should still be there.
 
 ## Troubleshooting
 
 | Symptom | Fix |
 |---|---|
-| "API offline" / CORS error in console | `FRONTEND_ORIGIN` must exactly match the Vercel URL (scheme included, no trailing slash) |
-| Frontend still calls localhost | `VITE_API_URL` is baked in at build time; redeploy Vercel after changing it |
-| `429 Too many requests` | Rate limit (100/min/IP); wait a minute |
-| `413 Payload too large` | Request body is over 1KB |
+| "API offline" | Check `/api/health` on the Vercel URL and the Railway deploy logs |
+| `/api/health` returns `503` | The backend can't reach Postgres: check `DATABASE_URL` and the Postgres service |
+| `403 Origin not allowed` | The page's origin isn't in `FRONTEND_ORIGIN` |
+| Signed out after every reload locally | Use http://localhost:5173 (not 127.0.0.1) so the Vite proxy and cookie line up |
+| `429 Too many requests` | Rate limit; wait a minute (15 minutes for sign-in attempts) |
+| `413 Payload too large` | Request body is over 10KB |
