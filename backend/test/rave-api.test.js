@@ -102,3 +102,87 @@ test('stocks include scores computed from stored history, and "No data" for stoc
   assert.equal(byTicker.GME.scores.medium.status, 'ok');
   assert.equal(byTicker.TSLA.scores.summary.label, 'No data');
 });
+
+// Inserts a successful run `minutesAgo` minutes ago with the given mentions per ticker
+async function addRun(minutesAgo, mentions, { market = 1000, status = 'success' } = {}) {
+  const { rows: [run] } = await pool.query(
+    `INSERT INTO collection_runs (kind, status, started_at, finished_at, pages_fetched, pages_total, tickers_seen, rows_written, market_total_mentions)
+     VALUES ('apewisdom', $1, now() - make_interval(mins => $2), now() - make_interval(mins => $2) + interval '8 seconds', 9, 9, 800, 103, $3)
+     RETURNING id`,
+    [status, minutesAgo, market]
+  );
+  if (status === 'success') {
+    for (const [ticker, m] of Object.entries(mentions)) {
+      await pool.query(
+        `INSERT INTO snapshots (run_id, ticker, fetched_at, ranked, rank, mentions, mentions_24h_ago)
+         VALUES ($1, $2, now() - make_interval(mins => $3), true, 5, $4, 10)`,
+        [run.id, ticker, minutesAgo, m]
+      );
+    }
+  }
+  return run;
+}
+
+test('status and runs tell "checked" apart from "data actually changed"', async () => {
+  await pool.query('TRUNCATE collection_runs, snapshots RESTART IDENTITY CASCADE');
+  const { agent } = await signedInAgent(app);
+
+  await addRun(150, { GME: 5, AMC: 2 });
+  await addRun(120, { GME: 5, AMC: 2 }); // identical to the run before
+  await addRun(90, { GME: 5, AMC: 2 }); // identical again
+  let { body } = await agent.get('/api/rave/status').expect(200);
+  assert.equal(body.lastChangeAt, null, 'no change has been seen yet');
+  assert.equal(body.unchangedRuns, 3);
+  assert.equal(body.expectedIntervalMinutes, 30);
+
+  await addRun(60, { GME: 9, AMC: 2 }); // GME moved
+  await addRun(30, { GME: 9, AMC: 2 });
+  ({ body } = await agent.get('/api/rave/status').expect(200));
+  assert.ok(body.lastChangeAt, 'a change is now on record');
+  assert.ok(Math.abs((Date.now() - new Date(body.lastChangeAt).getTime()) / 60000 - 60) < 2, 'the change was 60 minutes ago');
+  assert.equal(body.unchangedRuns, 1, 'one successful run since the change');
+
+  const { body: runs } = await agent.get('/api/rave/runs?limit=10').expect(200);
+  assert.equal(runs.length, 5);
+  assert.deepEqual(runs.map((r) => r.changed), [false, true, false, false, null], 'newest first; the oldest has nothing to compare with');
+  assert.equal(Math.round(runs[0].durationSec), 8);
+  assert.equal(runs[0].tickersSeen, 800);
+});
+
+test('runs lists failures and never marks them as a data change', async () => {
+  await pool.query('TRUNCATE collection_runs, snapshots RESTART IDENTITY CASCADE');
+  const { agent } = await signedInAgent(app);
+  await addRun(90, { GME: 5 });
+  await addRun(60, {}, { status: 'failed' });
+  await addRun(30, { GME: 6 });
+  const { body: runs } = await agent.get('/api/rave/runs').expect(200);
+  assert.deepEqual(runs.map((r) => [r.status, r.changed]), [['success', true], ['failed', null], ['success', null]]);
+});
+
+test('stocks include a sparkline and the day-over-day comparison', async () => {
+  await pool.query('TRUNCATE collection_runs, snapshots RESTART IDENTITY CASCADE');
+  const { agent } = await signedInAgent(app);
+  for (let i = 5; i >= 1; i--) await addRun(i * 30, { GME: 10 + (5 - i) });
+  const { body } = await agent.get('/api/rave/stocks').expect(200);
+  const gme = body.find((s) => s.ticker === 'GME');
+  assert.deepEqual(gme.spark, [10, 11, 12, 13, 14]);
+  assert.equal(gme.dayOverDay.change, 4); // 14 now vs the 10 stored as "24h ago"
+  assert.equal(body.find((s) => s.ticker === 'TSLA').dayOverDay, null);
+  assert.deepEqual(body.find((s) => s.ticker === 'TSLA').spark, []);
+});
+
+test('single-stock endpoint returns history, scores and 404s for unknown tickers', async () => {
+  await pool.query('TRUNCATE collection_runs, snapshots RESTART IDENTITY CASCADE');
+  const { agent } = await signedInAgent(app);
+  for (let i = 4; i >= 1; i--) await addRun(i * 45, { GME: 10 * i }); // 45, 90, 135 and 180 minutes ago
+  const { body } = await agent.get('/api/rave/stocks/gme?hours=2').expect(200);
+  assert.equal(body.ticker, 'GME');
+  assert.equal(body.name, 'GameStop');
+  assert.equal(body.history.length, 2, 'hours=2 keeps the 45- and 90-minute-old points only');
+  assert.equal(body.latest.mentions, 10);
+  assert.equal(body.scores.short.status, 'warming_up');
+  const all = (await agent.get('/api/rave/stocks/GME').expect(200)).body;
+  assert.equal(all.history.length, 4);
+  await agent.get('/api/rave/stocks/NOPE').expect(404);
+  await request(app).get('/api/rave/runs').expect(401);
+});

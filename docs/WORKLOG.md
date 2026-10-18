@@ -84,3 +84,23 @@ met after repeated attempts; results show no signal.
   low-volume names. The synthetic tests used levels around 100/day and do NOT cover this regime.
 - Still to verify on real data: that `mentions` is a rolling 24h count (mentions at t vs mentions_24h_ago at
   t+24h); collection cadence and gaps over several runs; the numbers against the apewisdom.io website.
+
+### 2026-10-18 Verified against the live service; UI built (branch, NOT yet released)
+- apewisdom.io allowed by the user. Ran the real adapter from this container (needs `NODE_USE_ENV_PROXY=1`, as Node's
+  built-in fetch ignores the sandbox proxy; Railway needs nothing): 820 tickers, 9/9 pages, 8.6 s, no duplicates
+  (the 816 vs 820 earlier was new tickers appearing between fetches). Shape matches the docs; numbers are real numbers.
+- Refresh probe (page 1 every 3 min): top-100 fingerprint changed 17:25 -> 17:31 (NVDA/GME/MU unchanged), so the
+  source updates within minutes. Raw payload is 112 KB per run (about 5 MB/day, 150 MB at 30 days).
+- Backend: `/api/rave/runs`, `/api/rave/stocks/:ticker`, status extras (`lastChangeAt`, `unchangedRuns`,
+  `expectedIntervalMinutes`, server `now`), `/stocks` gains `spark` and `dayOverDay`. Found and fixed: the "data changed"
+  comparison used the previous run even if it failed; now compares with the previous successful run. 54 tests pass.
+- Frontend: react-router + recharts (chart pages lazy-loaded). Header freshness pill (Live/Delayed/Stale, polls every
+  30 s, flashes "New data" on a new run), Radar (sort/filter/horizon/search in the URL, movers, sparklines), Data page
+  (run chart + table, changed vs same numbers), Stock page (history chart, three score explanations). Removed the demo
+  analytics screen; Notes stays under its own tab.
+- Browser-tested against a local stack seeded with 45 days of SIMULATED history (seed script lived in the scratchpad):
+  sorting, filters, horizon switch, unknown ticker, mobile width, no page errors. Gotchas: an old Vite on :5173 held the
+  port (kill by pid, never `pkill -f` from the tool shell: it matches its own command line and kills it, exit 144);
+  Recharts animations made screenshots show half-drawn charts (animations off).
+- Added docs/DATA_PIPELINE.md (collection, storage, aggregation).
+- PENDING USER DECISION: release this to main. Previews and the live site depend on the new backend endpoints.
