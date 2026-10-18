@@ -1,0 +1,15 @@
+{
+  "name": "rave-app",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Fullstack rave-app: Express API + React (Vite) frontend",
+  "workspaces": ["backend", "frontend"],
+  "scripts": {
+    "dev": "npm run dev --workspace=backend & npm run dev --workspace=frontend",
+    "dev:backend": "npm run dev --workspace=backend",
+    "dev:frontend": "npm run dev --workspace=frontend",
+    "start": "npm start --workspace=backend",
+    "build": "npm run build --workspace=frontend"
+  },
+  "engines": { "node": ">=18" }
+}
