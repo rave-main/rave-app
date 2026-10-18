@@ -68,3 +68,19 @@ met after repeated attempts; results show no signal.
   milestone 5 before a year of data accumulates.
 - Next: milestone 3 (prices + validation harness + forward ledger). BLOCKED on nothing technical, but the early
   release to main is still pending the user's decision, so no real data is accumulating yet.
+
+### 2026-10-18 Released to main (user approved); FIRST REAL DATA
+- Pushed 9a4272a to main (user explicitly approved after the first denial). Railway deployed it on Node 22,
+  waiting for CI first as configured.
+- First real collector run (log line 17:19:08 UTC): `success`, 9 of 9 pages, 816 tickers, 103 rows written,
+  not truncated, market total 1,867 mentions. /api/rave/status (signed in) agrees; stale=false.
+- Watchlist on the real leaderboard (mentions in 24h / 24h earlier; rank): NVDA 45/76 #3, GME 17/6 #21,
+  TSLA 18/74 #18, MSFT 29/24 #12, AAPL 8/25 #38, PLTR 8/14 #41, HOOD 5/7 #59, SOFI 2/1 #116, AMC 1/4 #581,
+  RIVN 1/2 #644. All ten were present, so none was stored as unranked.
+- FINDING: counts are small. Average is ~2 mentions per ticker; even NVDA at #3 has 45. The minLevel of 10
+  means AMC, RIVN, SOFI, HOOD, PLTR, AAPL cannot be flagged today. Log-scale z-scores on counts of 1-5 will be
+  noisy (Poisson noise dominates). To revisit once there are a few weeks of real data: minLevel, a
+  Poisson-aware spread floor, and whether medium/long (which average days) should carry the signal for
+  low-volume names. The synthetic tests used levels around 100/day and do NOT cover this regime.
+- Still to verify on real data: that `mentions` is a rolling 24h count (mentions at t vs mentions_24h_ago at
+  t+24h); collection cadence and gaps over several runs; the numbers against the apewisdom.io website.
