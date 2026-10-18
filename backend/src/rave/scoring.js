@@ -248,4 +248,44 @@ function scoreStock(rawSeries, { ticker, source = 'reddit' } = {}) {
   };
 }
 
-module.exports = { scoreStock, CONFIG, PROFILES, prepare, compare, DAY, HOUR };
+// Rates day `i` of a DAILY series (values[k] = the value on calendar day k, null when missing) exactly as the live
+// short horizon does for daily data (Wikipedia page views): same-weekday baseline once 4+ weeks exist, otherwise the
+// previous 7 days; spread from up to 28 daily observations. Used by the backtests so they cannot drift from the live logic.
+function rateDaily(values, i) {
+  const cur = values[i];
+  if (cur === null || cur === undefined) return null;
+  const lagValues = [];
+  for (let k = 1; k <= CONFIG.short.weeklyLags; k++) {
+    const v = values[i - 7 * k];
+    if (v !== null && v !== undefined) lagValues.push(v);
+  }
+  let base;
+  let nDays;
+  if (lagValues.length >= CONFIG.short.minWeeklyLags) {
+    base = lagValues;
+    nDays = lagValues.length;
+  } else {
+    base = [];
+    let oldest = null;
+    for (let k = 7; k >= 1; k--) {
+      const v = values[i - k];
+      if (v !== null && v !== undefined) {
+        base.push(v);
+        if (oldest === null) oldest = k;
+      }
+    }
+    if (!base.length || oldest < CONFIG.short.minSpanDays + 1) return null; // warming up
+    nDays = Math.max(1, Math.min(7, Math.round(oldest)));
+  }
+  const spread = [];
+  for (let k = 1; k <= CONFIG.spreadDays; k++) {
+    const v = values[i - k];
+    if (v !== null && v !== undefined) spread.push(v);
+  }
+  const m = compare(cur, base, { floor: 1, spread, countBase: median(base), nDays });
+  const hit = cur >= CONFIG.minLevel ? CONFIG.thresholds.find((t) => m.ratio >= t.ratio && m.z >= t.z) : null;
+  const label = hit ? hit.label : median(base) < CONFIG.lowVolume && cur < CONFIG.minLevel ? 'Low volume' : 'Quiet';
+  return { label, ratio: m.ratio, z: m.z };
+}
+
+module.exports = { scoreStock, rateDaily, CONFIG, PROFILES, prepare, compare, DAY, HOUR };

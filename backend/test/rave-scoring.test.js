@@ -216,3 +216,32 @@ test('config is versioned and thresholds are ordered strictest first', () => {
   assert.deepEqual(CONFIG.thresholds.map((t) => t.label), ['Extreme', 'Hot', 'Rising']);
   assert.equal(scoreStock(simulate({ days: 40, seed: 13 })).version, 'v1');
 });
+
+test('rateDaily (used by backtests) gives exactly the same ratio, z and label as the live scoring on daily data', () => {
+  const { rateDaily } = require('../src/rave/scoring');
+  const { rng } = require('./rave-sim');
+  const r = rng(77);
+  const days = 140;
+  const base = Date.UTC(2026, 0, 5);
+  let checked = 0;
+  for (const profile of ['smooth', 'spiky', 'gappy']) {
+    const values = Array.from({ length: days }, (_, i) => {
+      const weekly = i % 7 >= 5 ? 0.7 : 1;
+      const spike = profile === 'spiky' && r() < 0.06 ? 3 + 4 * r() : 1;
+      const v = Math.max(0, Math.round(800 * weekly * (1 + 0.15 * (r() - 0.5)) * spike));
+      return profile === 'gappy' && r() < 0.1 ? null : v;
+    });
+    for (let i = 0; i < days; i++) {
+      const series = values.slice(0, i + 1).map((v, k) => (v === null ? null : { t: base + k * 86400000, mentions: v, market: null, ranked: true, rank: null, rank24hAgo: null, mentions24hAgo: null })).filter(Boolean);
+      if (!series.length || series[series.length - 1].t !== base + i * 86400000) continue; // day i itself is missing
+      const live = scoreStock(series, { source: 'wiki' }).short;
+      const mine = rateDaily(values, i);
+      if (live.status !== 'ok') { assert.equal(mine, null, `day ${i} (${profile}): live is warming up`); continue; }
+      assert.ok(mine, `day ${i} (${profile}): backtest rates it too`);
+      assert.equal(mine.label, live.label, `day ${i} (${profile})`);
+      assert.ok(Math.abs(mine.ratio - live.raw.ratio) < 1e-9 && Math.abs(mine.z - live.raw.z) < 1e-9, `day ${i} (${profile}) numbers`);
+      checked++;
+    }
+  }
+  assert.ok(checked > 250, `${checked} days compared`);
+});
