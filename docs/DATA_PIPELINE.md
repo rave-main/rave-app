@@ -81,3 +81,14 @@ plan), storing the top 100 less often than every run, or rolling old rows up to 
 - (live) The first production run saved 816 tickers / 103 rows; the source's top-100 changed between samples 3 minutes apart.
 - ApeWisdom's API has NO history. Its per-ticker web pages embed about 22 hours of 10-minute buckets; that is an
   unofficial page (robots.txt only disallows /gotopage/; no terms page found), not an API.
+
+## 8. Sources and schedule (v2)
+| Source | When (UTC) | Notes |
+|---|---|---|
+| ApeWisdom leaderboard | :02 and :32 every hour | all ~820 tickers, one slot of 48 per day; no 10-minute scraping |
+| Wikipedia page views | 04:30, 16:30 | 5-year backfill, then top-up |
+| Prices (Yahoo) | 12:30, 22:30 | 5-year backfill, 10-day overlap top-up, weekly full refresh |
+| Hypothesis tests | 05:15, 23:15 | backtest plus forward-ledger outcomes |
+A job is due if it has no success since its latest scheduled time, so restarts and deploys catch up. Failures back off, and
+per-job advisory locks stop overlaps. State is in `collection_runs`; the Data page lists each source with Run now.
+Storage: one row per ticker per UTC day with 48 half-hour arrays (about 220 MB a year for all tickers).

@@ -204,3 +204,8 @@ td.sig { background: rgba(61, 220, 151, 0.14); }
 form.inline { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 form.inline input { flex: 1; min-width: 180px; }
 h3 { font-size: 1rem; margin: 20px 0 8px; }
+
+/* six tabs must fit a phone: scroll the tab bar instead of the page */
+.tabs { overflow-x: auto; scrollbar-width: none; }
+.tabs a { white-space: nowrap; padding: 8px 10px; }
+@media (min-width: 640px) { .tabs a { padding: 8px 14px; } }

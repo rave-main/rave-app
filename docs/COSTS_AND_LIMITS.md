@@ -11,3 +11,9 @@
 Adding stocks costs nothing on the collection side: every run already downloads all ~820 tickers. Each extra
 watchlist stock adds 48 rows a day (about 12 KB a day, 4 MB a year) unless it is already in the stored top 100.
 Price data adds a few requests per stock per day.
+
+## Update 2026-10-18 (v2)
+- All ~820 tickers are stored in about 220 MB a year (less than the 450 MB a year the first layout needed for 103 tickers).
+  Wikipedia months and prices add a few MB. The 500 MB volume lasts roughly two years; the Data page shows usage.
+- Wikimedia and Yahoo are free and need no keys. Yahoo is unofficial and could change or throttle; Stooq is blocked from Railway.
+- The Railway trial ends about 17 Nov 2026; after that Hobby is $5/month (usage measured about $2.2/month).

@@ -1,6 +1,6 @@
 # RAVE methodology
 
-Status: milestone 1. Scoring, validation and the alert interface are added as they are built.
+Status: v2. Reddit scoring, Wikipedia supplement, price data and hypothesis tests are live; alerts are a placeholder only.
 
 ## Data
 - Source: ApeWisdom `all-stocks` leaderboard (Reddit stock subreddits). Each snapshot gives, per ticker, `rank`,
@@ -8,7 +8,7 @@ Status: milestone 1. Scoring, validation and the alert interface are added as th
   its own history by collecting about every 30 minutes. There is no backfill.
 - A watchlist ticker that is not on the leaderboard is stored with `mentions = 0` and `ranked = false`, and shown
   as "not on leaderboard" rather than as a real zero.
-- Every run is recorded in `collection_runs`. Raw responses are kept 30 days; parsed rows are permanent.
+- Every run is recorded in `collection_runs`. Raw responses are kept 7 days; parsed rows are permanent.
 - Reddit chatter is a different signal from Google searches, and conclusions only apply to the former.
 
 ## Scoring (v1, `backend/src/rave/scoring.js`)
@@ -61,3 +61,28 @@ These are tests of the METHOD on synthetic data. Whether real attention behaves 
 real data arrives.
 **Independent check:** the same numbers were recomputed by a separate Python implementation written from this
 document; all 28 compared values (ratio and z, raw and adjusted, all horizons) matched exactly.
+
+## Wikipedia page views (supplement, `wiki.js`)
+- Each tracked ticker is matched to an English Wikipedia article (candidate titles from the ApeWisdom name, redirects followed,
+  disambiguation pages and non-company lead paragraphs rejected). Matches are heuristic: review and correct them in Settings.
+  A manual choice is never overwritten.
+- Daily page views (people only, Wikimedia API) are backfilled 5 years and scored by the same rule as Reddit. Views for a day
+  are published the following day, so Wikipedia is always about a day behind.
+- Agreement marker (two dots on the Radar): both Reddit and Wikipedia show a spike.
+
+## Prices (`prices.js`)
+- Yahoo daily bars (exchange-local dates), 5-year backfill, benchmark SPY, weekly full refresh to pick up splits.
+  Stooq is a fallback but is blocked from Railway.
+
+## Hypothesis tests (`validation.js`, `research.js`)
+- Event = first Hot or Extreme day of an episode (10-day cooldown). Entry at the open of the first trading day at least
+  2 days after the signal (realistic) or 1 day (optimistic). Outcome over 1/5/20 trading days: open-to-close return minus SPY,
+  absolute move, volume.
+- Compared with the same stock's ordinary days, and with days that followed an equally volatile stretch (5x5 grid of short and
+  long trailing volatility). p-values come from circularly shifting the attention series against prices and re-running everything.
+- Verdicts: insufficient, none, direction, size, both, marker (spikes mark stocks that are already volatile; attention adds
+  nothing once recent volatility is matched). Checked on synthetic worlds with known truth; two biases found and fixed.
+- First production result (Wikipedia, 43 stocks, 552 spikes): realistic entry = marker, optimistic = bigger moves, no direction.
+- Reddit has no history, so its spikes go into a forward ledger (one per stock per 7 days, entry at the next US open) and no
+  conclusion is drawn before 30 spikes have a 5-day outcome.
+- Limits: stocks are those popular today (selection bias favours stocks that did something); no trading costs; not advice.
