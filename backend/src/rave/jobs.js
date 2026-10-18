@@ -3,6 +3,7 @@ const { every } = require('./scheduler');
 const { runCollection } = require('./collector');
 const { runWikipedia } = require('./wikijob');
 const { runPrices } = require('./pricejob');
+const { runResearch, recordSpikes, updateLedger } = require('./research');
 
 function buildJobs() {
   return [
@@ -13,7 +14,12 @@ function buildJobs() {
       times: every(30, 2),
       staleAfterMs: 90 * 60 * 1000,
       selfRecording: true,
-      run: (pool) => runCollection(pool, { minIntervalMs: 5 * 60 * 1000 }),
+      // after a good run, note any new Hot/Extreme spikes for the forward ledger (a failure there never fails the run)
+      run: async (pool, ctx) => {
+        const result = await runCollection(pool, { minIntervalMs: 5 * 60 * 1000 });
+        if (result.status === 'success') await recordSpikes(pool).catch((e) => (ctx?.log || console).error('RAVE recordSpikes failed:', e.message));
+        return result;
+      },
     },
     {
       kind: 'wikipedia',
@@ -30,6 +36,14 @@ function buildJobs() {
       times: ['12:30', '22:30'],
       staleAfterMs: 30 * 60 * 60 * 1000,
       run: (pool, ctx) => runPrices(pool, ctx),
+    },
+    {
+      kind: 'research',
+      label: 'Hypothesis tests (Wikipedia backtest + Reddit forward ledger)',
+      cadence: 'twice a day, 05:15 and 23:15 UTC (after prices); fills in forward-ledger outcomes as prices arrive',
+      times: ['05:15', '23:15'],
+      staleAfterMs: 30 * 60 * 60 * 1000,
+      run: async (pool, ctx) => ({ ...(await runResearch(pool, ctx)), ledger: await updateLedger(pool) }),
     },
   ];
 }

@@ -10,6 +10,7 @@ const { runCollection } = require('./collector');
 const { runRecorded } = require('./scheduler');
 const { runDiagnostics } = require('./diagnostics');
 const { loadWikiSeries } = require('./wiki');
+const { ledgerSummary } = require('./research');
 
 const STALE_AFTER_MIN = 90; // the collector runs every 30 minutes
 const EXPECTED_INTERVAL_MIN = 30;
@@ -134,6 +135,12 @@ function raveRouter(pool) {
   // Can this deployment reach each external source right now?
   router.get('/diagnostics', wrap(async (req, res) => {
     res.json({ at: new Date().toISOString(), results: await runDiagnostics() });
+  }));
+
+  // Research results: the latest Wikipedia backtest and the Reddit forward ledger
+  router.get('/research', wrap(async (req, res) => {
+    const { rows: [latest] } = await pool.query(`SELECT id, ran_at AS "ranAt", results FROM validation_runs WHERE kind = 'wiki_backtest' ORDER BY ran_at DESC LIMIT 1`);
+    res.json({ backtest: latest ? { id: latest.id, ranAt: latest.ranAt, ...latest.results } : null, ledger: await ledgerSummary(pool) });
   }));
 
   // Every scheduled source: cadence, last success, next scheduled run, staleness

@@ -201,6 +201,43 @@ const migrations = [
      error TEXT,
      checked_at TIMESTAMPTZ NOT NULL DEFAULT now()
    );`,
+
+  // Research results, the forward ledger of Reddit spikes, and the (unused) placeholder for alert channels
+  `CREATE TABLE validation_runs (
+     id SERIAL PRIMARY KEY,
+     kind TEXT NOT NULL,
+     ran_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+     params JSONB NOT NULL,
+     results JSONB NOT NULL
+   );
+   CREATE INDEX validation_runs_kind_idx ON validation_runs(kind, ran_at DESC);
+   CREATE TABLE spike_events (
+     id SERIAL PRIMARY KEY,
+     ticker TEXT NOT NULL,
+     detected_at TIMESTAMPTZ NOT NULL,
+     label TEXT NOT NULL,
+     ratio DOUBLE PRECISION,
+     z DOUBLE PRECISION,
+     mentions INTEGER,
+     baseline DOUBLE PRECISION,
+     explanation TEXT,
+     wiki_label TEXT,
+     run_id INTEGER,
+     entry_day DATE,
+     entry_open DOUBLE PRECISION,
+     outcomes JSONB,
+     outcomes_at TIMESTAMPTZ,
+     alerted_at TIMESTAMPTZ
+   );
+   CREATE INDEX spike_events_ticker_idx ON spike_events(ticker, detected_at DESC);
+   -- Placeholder only: nothing reads or sends from this yet (Slack incoming webhook is the planned first channel)
+   CREATE TABLE alert_channels (
+     id SERIAL PRIMARY KEY,
+     type TEXT NOT NULL,
+     enabled BOOLEAN NOT NULL DEFAULT false,
+     config JSONB NOT NULL DEFAULT '{}',
+     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+   );`,
 ];
 
 function createPool(connectionString = process.env.DATABASE_URL) {
