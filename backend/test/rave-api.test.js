@@ -71,3 +71,34 @@ test('stocks returns the latest snapshot per watchlist stock, and nulls where no
   assert.equal(byTicker.AMC.ranked, false);
   assert.equal(byTicker.TSLA.mentions, null, 'no snapshot yet');
 });
+
+test('stocks include scores computed from stored history, and "No data" for stocks without any', async () => {
+  const { simulate, HOUR } = require('./rave-sim');
+  await pool.query('TRUNCATE collection_runs, snapshots RESTART IDENTITY CASCADE');
+  const { agent } = await signedInAgent(app);
+
+  // 40 days of GME history, shifted so the newest point is "now"; a 5x surge over the final 36 hours
+  const base = simulate({ days: 40, seed: 21, multiplier: () => 1 });
+  const surge = simulate({ days: 40, seed: 21, multiplier: (t) => (t > base[base.length - 1].t - 36 * HOUR ? 5 : 1) });
+  const shift = Date.now() - surge[surge.length - 1].t;
+  const times = surge.map((p) => new Date(p.t + shift));
+  const { rows: runs } = await pool.query(
+    `INSERT INTO collection_runs (kind, status, started_at, market_total_mentions)
+     SELECT 'apewisdom', 'success', t, m FROM unnest($1::timestamptz[], $2::int[]) AS x(t, m) RETURNING id`,
+    [times, surge.map((p) => p.market)]
+  );
+  await pool.query(
+    `INSERT INTO snapshots (run_id, ticker, fetched_at, ranked, rank, mentions)
+     SELECT run_id, 'GME', t, true, 3, m FROM unnest($1::int[], $2::timestamptz[], $3::int[]) AS x(run_id, t, m)`,
+    [runs.map((r) => r.id), times, surge.map((p) => p.mentions)]
+  );
+
+  const { body } = await agent.get('/api/rave/stocks').expect(200);
+  const byTicker = Object.fromEntries(body.map((s) => [s.ticker, s]));
+  assert.equal(byTicker.GME.scores.version, 'v1');
+  assert.equal(byTicker.GME.scores.short.status, 'ok');
+  assert.ok(['Hot', 'Extreme'].includes(byTicker.GME.scores.short.label), byTicker.GME.scores.short.label);
+  assert.match(byTicker.GME.scores.short.explanation, /^GME: /);
+  assert.equal(byTicker.GME.scores.medium.status, 'ok');
+  assert.equal(byTicker.TSLA.scores.summary.label, 'No data');
+});

@@ -1,5 +1,7 @@
 const express = require('express');
 const { wrap } = require('../auth');
+const { loadSeries } = require('./series');
+const { scoreStock } = require('./scoring');
 
 const STALE_AFTER_MIN = 90; // the collector runs about every 30 minutes
 
@@ -13,7 +15,7 @@ function raveRouter(pool) {
     res.json(rows);
   }));
 
-  // Latest snapshot for each active watchlist stock (scores are added in a later milestone)
+  // Latest snapshot and RAVE scores (short / medium / long) for each active watchlist stock
   router.get('/stocks', wrap(async (req, res) => {
     const { rows } = await pool.query(
       `SELECT w.ticker, w.name, w.is_control AS "isControl",
@@ -25,7 +27,8 @@ function raveRouter(pool) {
        ) s ON true
        WHERE w.active ORDER BY w.is_control, w.ticker`
     );
-    res.json(rows);
+    const series = await loadSeries(pool, rows.map((r) => r.ticker));
+    res.json(rows.map((r) => ({ ...r, scores: scoreStock(series.get(r.ticker), { ticker: r.ticker }) })));
   }));
 
   // Source health: how fresh the data is, how much history exists, and how recent runs went

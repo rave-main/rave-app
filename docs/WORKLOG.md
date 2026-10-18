@@ -52,3 +52,19 @@ met after repeated attempts; results show no signal.
 - Continuing with milestone 2 (scoring) on the branch, which does not depend on the release.
 - Assumption to verify on real data once collecting: ApeWisdom `mentions` is a rolling 24-hour count, so
   mentions at time t should be close to `mentions_24h_ago` at t + 24h. Scoring is designed around that.
+
+### 2026-10-18 Milestone 2 (scoring) built on the branch
+- `rave/stats.js` (median, scaled MAD), `rave/scoring.js` (v1; see docs/METHODOLOGY.md), `rave/series.js`
+  (loads recent data at full resolution, older hourly), `/api/rave/stocks` now returns `scores` per stock.
+- Tests: 16 scoring tests with a synthetic simulator (`test/rave-sim.js`) + 1 API test. 50 backend tests pass.
+  Targets met: 3x surge detected >= 90% (100 trials), 2x >= Rising >= 90%, noise <= ~1 false Hot+ episode per
+  stock-quarter, market-wide wave not flagged.
+- Found and fixed while testing: the short horizon claimed "high" confidence with only 7 days of baseline; now
+  capped at "medium". A test that expected tiny counts to stay Quiet failed because the simulator produced exactly
+  10 mentions (the minLevel); rewrote it as an explicit boundary test (8 -> Quiet, 12 -> flagged).
+- Open: minLevel (10) and all thresholds are starting points chosen before seeing real data; revisit after the
+  first weeks of collection (check the leaderboard's typical counts for the watchlist stocks, e.g. AAPL/MSFT).
+- Open: /api/rave/stocks recomputes scores per request from raw history; fine now, add daily rollups/caching in
+  milestone 5 before a year of data accumulates.
+- Next: milestone 3 (prices + validation harness + forward ledger). BLOCKED on nothing technical, but the early
+  release to main is still pending the user's decision, so no real data is accumulating yet.
