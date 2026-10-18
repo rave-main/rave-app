@@ -17,7 +17,7 @@ Service variables on `rave-app-backend`:
 | `DATABASE_URL`    | `${{Postgres.DATABASE_URL}}` (reference to the Postgres service) |
 | `NODE_ENV`        | `production` (makes the session cookie `Secure`) |
 | `FRONTEND_ORIGIN` | `https://rave-app-eight.vercel.app,https://*-rave-ecf1.vercel.app` (production + previews) |
-| `TRUST_PROXY`     | Number of proxy hops in front of the app, so rate limits see the real client IP |
+| `TRUST_PROXY`     | `2` (Vercel's proxy + Railway's edge), so rate limits see the visitor's IP rather than Vercel's |
 
 Railway injects `PORT`. Migrations run on every start, so a deploy with a new migration upgrades the schema.
 
