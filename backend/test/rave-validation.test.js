@@ -64,11 +64,27 @@ test('a volatility effect (moves 2.5x larger for 5 days after a spike) is detect
   assert.ok(r.size.mean > 0.004, `size excess ${r.size.mean}`);
   assert.ok(r.size.p < 0.005, `p ${r.size.p}`);
   assert.ok(r.size.ci[0] > 0);
+  const m = s.matched[5].size;
+  assert.ok(m.p < 0.01 && m.mean > 0.8 * r.size.mean, `a real effect survives matching on recent volatility (${m.mean} vs ${r.size.mean})`);
   assert.ok(r.volume.mean > 0.05 && r.volume.p < 0.05, 'volume rises too');
   assert.ok(r.direction.p > 0.01, `direction p ${r.direction.p}`);
   const vd = v.verdict(s);
   assert.equal(vd.level, 'size');
-  assert.match(vd.headline, /larger price moves, but not in a consistent direction/);
+  assert.match(vd.headline, /larger price moves.*but not in a consistent direction/);
+});
+
+test('volatility clustering with attention that FOLLOWS price: the plain test is fooled, the volatility-matched test is not', async () => {
+  for (const seed of [32, 34, 36]) {
+    const s = await study(world({ seed, volCluster: true, attentionFollowsPrice: true }), { horizons: [5], B: 300 });
+    const plain = s.results[5].size;
+    const matched = s.matched[5].size;
+    assert.ok(plain.p < 0.01 && plain.mean > 0.01, `without matching it looks like an effect (${(plain.mean * 100).toFixed(2)}%, p ${plain.p})`);
+    assert.ok(matched.mean < 0.4 * plain.mean, `matching removes most of it: ${(matched.mean * 100).toFixed(2)}% vs ${(plain.mean * 100).toFixed(2)}%`);
+    const vd = v.verdict(s);
+    assert.equal(vd.level, 'marker', `seed ${seed}: ${vd.headline}`);
+    assert.match(vd.headline, /already moving a lot/);
+    assert.match(vd.details.join(' '), /% of the plain difference remains/);
+  }
 });
 
 test('a drift effect (+0.8% a day for 5 days) is detected as direction', async () => {

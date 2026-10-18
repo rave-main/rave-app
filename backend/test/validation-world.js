@@ -11,7 +11,7 @@ function gauss(r) { return Math.sqrt(-2 * Math.log(r() || 1e-12)) * Math.cos(2 *
 //   volMult / drift: applied on the 5 trading days starting `effectLag` calendar days after the spike day
 //   sameDayVol: the stock also moves a lot ON the spike day itself (news moves both; not tradable)
 //   attentionFollowsPrice: attention spikes the day AFTER a big price move instead of leading it
-function world({ tickers = 30, days = 1100, seed = 1, effect = {}, attentionFollowsPrice = false }) {
+function world({ tickers = 30, days = 1100, seed = 1, effect = {}, attentionFollowsPrice = false, volCluster = false }) {
   const r = v.makeRng(seed);
   const trading = Array.from({ length: days }, (_, i) => i).filter(isWeekday);
   const mkt = trading.map(() => 0.0003 + 0.009 * gauss(r));
@@ -33,7 +33,13 @@ function world({ tickers = 30, days = 1100, seed = 1, effect = {}, attentionFoll
       }
     }
     // idiosyncratic returns, with the effect injected
-    const idio = trading.map(() => 0.015 * gauss(r));
+    // volCluster: volatility is persistent (a quiet stretch stays quiet, a wild one stays wild), as in real markets
+    let logVol = 0;
+    const idio = trading.map(() => {
+      if (!volCluster) return 0.015 * gauss(r);
+      logVol = 0.93 * logVol + 0.28 * gauss(r);
+      return 0.012 * Math.exp(logVol) * gauss(r);
+    });
     const volume = trading.map(() => 1e6 * Math.exp(0.15 * gauss(r)));
     const tIndex = new Map(trading.map((d, k) => [d, k]));
     // first trading day on/after calendar day `cal`; past the end of the data there is none (no effect is injected)

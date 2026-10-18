@@ -105,6 +105,8 @@ function outcomeAt(px, bench, e, h) {
 // of the procedure is therefore part of the null, so a spike's neighbourhood being removed from the controls cannot
 // masquerade as an effect (an earlier version drew random days from a pool instead and was biased, caught by testing).
 const METRICS = ['abn', 'absAbn', 'vol'];
+const QUINTILES = 5;
+const CELLS = QUINTILES * QUINTILES;
 
 function prepareTicker(s, benchPx, { horizons, lagDays, minLabel }) {
   const px = indexPrices(s.prices);
@@ -117,6 +119,40 @@ function prepareTicker(s, benchPx, { horizons, lagDays, minLabel }) {
   // trading index of the entry for a signal on calendar day c: the first trading day on or after c + lagDays
   const entryOfCal = new Int32Array(nCal);
   for (let c = 0; c < nCal; c++) entryOfCal[c] = firstTradingOnOrAfter(px, addDays(s.startDay, c + lagDays));
+
+  // How volatile had the stock been just BEFORE the entry? (market-adjusted daily moves). Used to ask whether attention
+  // tells us anything beyond "this stock has just been moving a lot".
+  const move = new Float64Array(px.n).fill(NaN);
+  for (let i = 1; i < px.n; i++) {
+    const b1 = benchPx.idx.get(px.days[i]);
+    const b0 = benchPx.idx.get(px.days[i - 1]);
+    if (b1 !== undefined && b0 !== undefined) move[i] = Math.abs(px.rows[i].close / px.rows[i - 1].close - benchPx.rows[b1].close / benchPx.rows[b0].close);
+  }
+  // Two measures of how volatile the stock had been just before the entry: the last 5 trading days (what usually TRIGGERS an
+  // attention spike) and the last 30 (the longer volatility regime). Windows are matched on both, in a 5 x 5 grid of the
+  // stock's own quintiles, so an "equally volatile" window really is comparable.
+  const meanMove = (e, len) => {
+    let sum = 0, n = 0;
+    for (let k = 1; k <= len && e - k >= 0; k++) if (!Number.isNaN(move[e - k])) { sum += move[e - k]; n++; }
+    return n >= Math.ceil(len * 0.8) ? sum / n : NaN;
+  };
+  const short5 = new Float64Array(px.n).fill(NaN);
+  const long30 = new Float64Array(px.n).fill(NaN);
+  for (let e = 31; e < px.n; e++) { short5[e] = meanMove(e, 5); long30[e] = meanMove(e, 30); }
+  const cutsOf = (arr) => {
+    const sorted = [...arr].filter((x) => !Number.isNaN(x)).sort((x, y) => x - y);
+    return sorted.length >= 200 ? Array.from({ length: QUINTILES - 1 }, (_, q) => sorted[Math.floor(((q + 1) * sorted.length) / QUINTILES)]) : null;
+  };
+  const cut5 = cutsOf(short5);
+  const cut30 = cutsOf(long30);
+  const bucket = new Int8Array(px.n).fill(-1);
+  if (cut5 && cut30) {
+    for (let e = 0; e < px.n; e++) {
+      if (Number.isNaN(short5[e]) || Number.isNaN(long30[e])) continue;
+      bucket[e] = cut5.filter((c) => short5[e] > c).length * QUINTILES + cut30.filter((c) => long30[e] > c).length;
+    }
+  }
+
   const metricsAt = {};
   for (const h of horizons) {
     const arrs = { abn: new Float64Array(px.n).fill(NaN), absAbn: new Float64Array(px.n).fill(NaN), vol: new Float64Array(px.n).fill(NaN) };
@@ -126,14 +162,22 @@ function prepareTicker(s, benchPx, { horizons, lagDays, minLabel }) {
       arrs.abn[e] = o.abn; arrs.absAbn[e] = o.absAbn; if (o.vol !== null) arrs.vol[e] = o.vol;
     }
     const tot = {};
+    const dec = {};
     for (const m of METRICS) {
       let sum = 0, n = 0, pos = 0;
-      for (let e = 0; e < px.n; e++) { const x = arrs[m][e]; if (!Number.isNaN(x)) { sum += x; n++; if (x > 0) pos++; } }
+      const dSum = new Float64Array(CELLS), dN = new Int32Array(CELLS), dPos = new Int32Array(CELLS);
+      for (let e = 0; e < px.n; e++) {
+        const x = arrs[m][e];
+        if (Number.isNaN(x)) continue;
+        sum += x; n++; if (x > 0) pos++;
+        if (bucket[e] >= 0) { dSum[bucket[e]] += x; dN[bucket[e]]++; if (x > 0) dPos[bucket[e]]++; }
+      }
       tot[m] = { sum, n, pos };
+      dec[m] = { dSum, dN, dPos };
     }
-    metricsAt[h] = { arrs, tot };
+    metricsAt[h] = { arrs, tot, dec };
   }
-  return { ticker: s.ticker, n: px.n, nCal, hot, entryOfCal, metricsAt, mark: new Int32Array(px.n) };
+  return { ticker: s.ticker, n: px.n, nCal, hot, entryOfCal, bucket, metricsAt };
 }
 
 // Events for one shift of the attention signal: first day of each Hot+ episode (cool-down), then their entry days
@@ -151,38 +195,39 @@ function entriesForShift(t, shift, { cooldownDays }) {
   return entries;
 }
 
-// For one ticker, one shift, one horizon: the events' outcomes and the ordinary-day mean (windows near events excluded)
-function tickerSample(t, entries, h, { excludeWindow }) {
-  const { arrs, tot } = t.metricsAt[h];
-  const excluded = [];
-  if (excludeWindow !== null && excludeWindow !== undefined) {
-    const stamp = (t.stamp = (t.stamp || 0) + 1);
-    for (const e of entries) for (let k = -excludeWindow; k <= excludeWindow; k++) {
-      const i = e + k;
-      if (i >= 0 && i < t.n && t.mark[i] !== stamp) { t.mark[i] = stamp; excluded.push(i); }
-    }
-  }
+// Per event: its outcome and the baseline it is compared with. 'plain' baseline = the stock's average over ALL its
+// windows; 'matched' baseline = the average over windows that followed an equally volatile stretch (same 5 x 5 cell).
+function tickerSample(t, entries, h, mode) {
+  const { arrs, tot, dec } = t.metricsAt[h];
   const out = {};
   for (const m of METRICS) {
     const a = arrs[m];
-    let sum = tot[m].sum, n = tot[m].n, pos = tot[m].pos;
-    for (const i of excluded) if (!Number.isNaN(a[i])) { sum -= a[i]; n--; if (a[i] > 0) pos--; }
-    if (n < 30) { out[m] = null; continue; }
-    const ev = entries.filter((e) => !Number.isNaN(a[e])).map((e) => a[e]);
-    out[m] = ev.length ? { ev, ctlMean: sum / n, ctlHit: pos / n } : null;
+    const ev = [], ctl = [], ctlHit = [];
+    for (const e of entries) {
+      if (Number.isNaN(a[e])) continue;
+      if (mode === 'plain') {
+        if (tot[m].n < 30) continue;
+        ev.push(a[e]); ctl.push(tot[m].sum / tot[m].n); ctlHit.push(tot[m].pos / tot[m].n);
+      } else {
+        const d = t.bucket[e];
+        if (d < 0 || dec[m].dN[d] < 10) continue;
+        ev.push(a[e]); ctl.push(dec[m].dSum[d] / dec[m].dN[d]); ctlHit.push(dec[m].dPos[d] / dec[m].dN[d]);
+      }
+    }
+    out[m] = ev.length ? { ev, ctl, ctlHit } : null;
   }
   return out;
 }
 
 const pooledStat = (parts) => {
   let sum = 0, n = 0;
-  for (const p of parts) for (const v of p.ev) { sum += v - p.ctlMean; n++; }
+  for (const p of parts) for (let i = 0; i < p.ev.length; i++) { sum += p.ev[i] - p.ctl[i]; n++; }
   return n ? sum / n : NaN;
 };
 
-function studyMetric(prepared, h, metric, observed, { B, rng, oneSided, nullStats }) {
+function studyMetric(h, metric, observed, { B, rng, oneSided, nullStats, key }) {
   const parts = observed.map((o) => o[metric]).filter(Boolean);
-  const excess = parts.flatMap((p) => p.ev.map((v) => v - p.ctlMean));
+  const excess = parts.flatMap((p) => p.ev.map((x, i) => x - p.ctl[i]));
   if (!excess.length) return null;
   const stat = mean(excess);
   const boots = [];
@@ -192,67 +237,71 @@ function studyMetric(prepared, h, metric, observed, { B, rng, oneSided, nullStat
     boots.push(sum / excess.length);
   }
   boots.sort((a, b) => a - b);
-  const nulls = nullStats[`${h}|${metric}`].filter((x) => !Number.isNaN(x));
+  const nulls = nullStats[`${key}|${h}|${metric}`].filter((x) => !Number.isNaN(x));
   const extreme = nulls.filter((x) => (oneSided ? x >= stat : Math.abs(x) >= Math.abs(stat))).length;
   const evRaw = parts.flatMap((p) => p.ev);
-  const weightedCtl = (f) => mean(parts.flatMap((p) => p.ev.map(() => f(p))));
   return {
     n: excess.length,
     tickers: parts.length,
-    mean: stat, // average excess over the stock's own ordinary days
+    mean: stat, // average excess over the baseline
     median: median(excess),
     ci: [quantile(boots, 0.025), quantile(boots, 0.975)],
     p: (extreme + 1) / (nulls.length + 1),
     nullDraws: nulls.length,
     eventMean: mean(evRaw),
-    controlMean: weightedCtl((p) => p.ctlMean),
+    controlMean: mean(parts.flatMap((p) => p.ctl)),
     hitRate: metric === 'abn' ? mean(evRaw.map((x) => (x > 0 ? 1 : 0))) : null,
-    controlHitRate: metric === 'abn' ? weightedCtl((p) => p.ctlHit) : null,
+    controlHitRate: metric === 'abn' ? mean(parts.flatMap((p) => p.ctlHit)) : null,
   };
 }
 
-// series: [{ ticker, startDay, values (daily attention), prices: [{day, open, close, volume}] }], bench: SPY rows
-// excludeWindow: null (default) = unconditional baseline; a number would drop windows within that many days of an event
 const tick = () => new Promise((resolve) => setImmediate(resolve)); // let the server answer requests between chunks of work
 
-async function eventStudy({ series, bench, horizons = HORIZONS, lagDays = 2, minLabel = 'Hot', cooldownDays = 10, excludeWindow = null, B = 1000, seed = 1 }) {
+// series: [{ ticker, startDay, values (daily attention), prices: [{day, open, close, volume}] }], bench: SPY rows.
+// results[h]: events vs the stock's ordinary windows (the pre-specified test). matched[h]: events vs windows that followed
+// an equally volatile stretch, i.e. does attention say anything BEYOND recent price moves?
+async function eventStudy({ series, bench, horizons = HORIZONS, lagDays = 2, minLabel = 'Hot', cooldownDays = 10, B = 1000, seed = 1 }) {
   const benchPx = indexPrices(bench);
   const rng = makeRng(seed);
-  const cfg = { cooldownDays, excludeWindow };
+  const cfg = { cooldownDays };
   const prepared = series.map((s) => prepareTicker(s, benchPx, { horizons, lagDays, minLabel }));
+  const MODES = ['plain', 'matched'];
 
   const sampleAll = (shiftOf) => {
-    const perH = {};
-    for (const h of horizons) perH[h] = [];
+    const perMode = {};
+    for (const mode of MODES) { perMode[mode] = {}; for (const h of horizons) perMode[mode][h] = []; }
     for (const t of prepared) {
       const entries = entriesForShift(t, shiftOf(t), cfg);
       if (!entries.length) continue;
-      for (const h of horizons) perH[h].push(tickerSample(t, entries, h, cfg));
+      for (const mode of MODES) for (const h of horizons) perMode[mode][h].push(tickerSample(t, entries, h, mode));
     }
-    return perH;
+    return perMode;
   };
-  const observedAll = sampleAll(() => 0);
+  const observed = sampleAll(() => 0);
   const eventCount = prepared.reduce((n, t) => n + entriesForShift(t, 0, cfg).length, 0);
 
   // null: B random rotations of the attention signals (at least 60 days away from the true alignment)
   const nullStats = {};
-  for (const h of horizons) for (const m of METRICS) nullStats[`${h}|${m}`] = [];
+  for (const mode of MODES) for (const h of horizons) for (const m of METRICS) nullStats[`${mode}|${h}|${m}`] = [];
   for (let b = 0; b < B; b++) {
-    const perH = sampleAll((t) => 60 + Math.floor(rng() * Math.max(1, t.nCal - 120)));
-    for (const h of horizons) for (const m of METRICS) nullStats[`${h}|${m}`].push(pooledStat(perH[h].map((o) => o[m]).filter(Boolean)));
+    const perMode = sampleAll((t) => 60 + Math.floor(rng() * Math.max(1, t.nCal - 120)));
+    for (const mode of MODES) for (const h of horizons) for (const m of METRICS) nullStats[`${mode}|${h}|${m}`].push(pooledStat(perMode[mode][h].map((o) => o[m]).filter(Boolean)));
     if (b % 20 === 19) await tick();
   }
 
-  const results = {};
-  for (const h of horizons) {
-    const opts = { B: Math.min(B, 1000), rng, nullStats };
-    results[h] = {
-      direction: studyMetric(prepared, h, 'abn', observedAll[h], { ...opts, oneSided: false }), // average return differs from ordinary days
-      size: studyMetric(prepared, h, 'absAbn', observedAll[h], { ...opts, oneSided: true }), // moves are LARGER than ordinary days
-      volume: studyMetric(prepared, h, 'vol', observedAll[h], { ...opts, oneSided: true }),
-    };
-  }
-  return { lagDays, minLabel, tickersWithEvents: observedAll[horizons[0]].length, events: eventCount, results };
+  const build = (mode) => {
+    const out = {};
+    for (const h of horizons) {
+      const opts = { B: Math.min(B, 1000), rng, nullStats, key: mode };
+      out[h] = {
+        direction: studyMetric(h, 'abn', observed[mode][h], { ...opts, oneSided: false }), // average return differs from the baseline
+        size: studyMetric(h, 'absAbn', observed[mode][h], { ...opts, oneSided: true }), // moves are LARGER than the baseline
+        volume: studyMetric(h, 'vol', observed[mode][h], { ...opts, oneSided: true }),
+      };
+    }
+    return out;
+  };
+  return { lagDays, minLabel, tickersWithEvents: observed.plain[horizons[0]].length, events: eventCount, results: build('plain'), matched: build('matched') };
 }
 
 // ---------- lead-lag ----------
@@ -326,7 +375,8 @@ async function leadLag({ series, bench, maxLag = 10, B = 500, seed = 2 }) {
   return rows;
 }
 
-// Plain-language verdict from the pre-specified tests: size and direction of the move 5 trading days after entry.
+// Plain-language verdict from the pre-specified tests: size and direction of the move 5 trading days after entry,
+// and whether attention adds anything beyond how volatile the stock had just been.
 function verdict(study, { minEvents = 30, alpha = 0.05 } = {}) {
   const r5 = study.results[5];
   if (!r5 || !r5.size || r5.size.n < minEvents) {
@@ -334,15 +384,25 @@ function verdict(study, { minEvents = 30, alpha = 0.05 } = {}) {
     return { level: 'insufficient', headline: `Not enough spikes yet to say anything (${n} so far, ${minEvents} needed).`, details: [] };
   }
   const bonferroni = alpha / 2; // two primary questions: is the move larger, and does it have a direction
+  const m5 = study.matched?.[5];
   const sizeSig = r5.size.p < bonferroni && r5.size.mean > 0;
   const dirSig = r5.direction.p < bonferroni;
+  // attention adds information only if most of the size difference survives comparing with equally volatile stretches
+  // (true volatility is hidden, so matching on recent moves is imperfect and a small residue is expected either way)
+  const sizeBeyond = Boolean(m5?.size) && m5.size.p < bonferroni && m5.size.mean >= 0.5 * r5.size.mean;
   const pct = (x) => `${(x * 100).toFixed(2)}%`;
   const details = [
     `Size of move over the next 5 trading days: ${pct(r5.size.eventMean)} after a spike vs ${pct(r5.size.controlMean)} on ordinary days (difference ${pct(r5.size.mean)}, 95% range ${pct(r5.size.ci[0])} to ${pct(r5.size.ci[1])}, p = ${r5.size.p.toFixed(3)}).`,
     `Direction: average market-adjusted return ${pct(r5.direction.eventMean)} after a spike vs ${pct(r5.direction.controlMean)} on ordinary days (difference ${pct(r5.direction.mean)}, 95% range ${pct(r5.direction.ci[0])} to ${pct(r5.direction.ci[1])}, p = ${r5.direction.p.toFixed(3)}); ${(r5.direction.hitRate * 100).toFixed(0)}% of spikes were followed by a gain vs ${(r5.direction.controlHitRate * 100).toFixed(0)}% of ordinary days.`,
   ];
+  if (m5?.size) {
+    details.push(`Beyond recent volatility: compared with days that followed an equally volatile stretch, the size difference is ${pct(m5.size.mean)} (95% range ${pct(m5.size.ci[0])} to ${pct(m5.size.ci[1])}, p = ${m5.size.p.toFixed(3)}); ${r5.size.mean > 0 ? Math.round(Math.max(0, (100 * m5.size.mean) / r5.size.mean)) : 0}% of the plain difference remains.`);
+  }
+  if (sizeSig && !sizeBeyond && !dirSig) {
+    return { level: 'marker', headline: 'Spikes mark stocks that are already moving a lot, and big moves tend to continue for a few days. Once recent volatility is accounted for, attention adds no information about the size or direction of what comes next.', details };
+  }
   if (sizeSig && dirSig) return { level: 'both', headline: `Spikes were followed by larger AND directional price moves (${r5.direction.mean > 0 ? 'up' : 'down'}), at an entry ${study.lagDays} days after the spike.`, details };
-  if (sizeSig) return { level: 'size', headline: `Spikes were followed by larger price moves, but not in a consistent direction: attention predicts how much, not which way.`, details };
+  if (sizeSig) return { level: 'size', headline: 'Spikes were followed by larger price moves, even compared with equally volatile stretches, but not in a consistent direction: attention predicts how much, not which way.', details };
   if (dirSig) return { level: 'direction', headline: `Spikes were followed by a ${r5.direction.mean > 0 ? 'rise' : 'fall'} in price, without larger moves overall.`, details };
   return { level: 'none', headline: `No evidence that these spikes precede unusual price moves when entering ${study.lagDays} days after the signal.`, details };
 }
