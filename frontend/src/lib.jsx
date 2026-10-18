@@ -7,6 +7,7 @@ export const SessionContext = createContext({ expire: () => {} });
 export function usePoll(path, intervalMs, { enabled = true } = {}) {
   const { expire } = useContext(SessionContext);
   const [state, setState] = useState({ data: null, error: null, loadedAt: null });
+  const [version, setVersion] = useState(0);
 
   useEffect(() => {
     if (!enabled) return undefined;
@@ -33,9 +34,9 @@ export function usePoll(path, intervalMs, { enabled = true } = {}) {
       clearTimeout(timer);
       document.removeEventListener('visibilitychange', onVisible);
     };
-  }, [path, intervalMs, enabled, expire]);
+  }, [path, intervalMs, enabled, expire, version]);
 
-  return state;
+  return { ...state, reload: () => setVersion((v) => v + 1) };
 }
 
 // Re-renders on an interval so relative times keep ticking

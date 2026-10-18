@@ -127,3 +127,19 @@ met after repeated attempts; results show no signal.
 - Open decisions for the user: release to main; watchlist (add high-volume names?); whether to also read ApeWisdom's
   10-minute ticker pages (backfill ~22h and repair gaps) given it is an unofficial page; whether to pursue an older-history
   source (Wikipedia pageviews is free/official, daily since 2015; Reddit archives are heavy); upgrade Railway before ~17 Nov.
+
+### 2026-10-18 Release 2: all tickers, scheduler, Wikipedia, prices, hypothesis tests, new UI
+- Storage: every ApeWisdom ticker (~820) stored as one row per ticker per UTC day with 48 half-hour slot arrays; ~220 MB/year.
+  Tracked set shown on the Radar = watchlist + anything that reached 5 mentions in a day this week.
+- Scheduler (`scheduler.js`, `jobs.js`): fixed UTC times, "due" if no success since the last scheduled time, catch-up after
+  restarts, failure backoff, per-job advisory locks. ApeWisdom :02/:32; Wikipedia 04:30/16:30; prices 12:30/22:30;
+  research 05:15/23:15. No 10-minute scraping.
+- Wikipedia page views supplement (never replace) Reddit: automatic article matching (editable in Settings), 5-year backfill,
+  same scoring rule, agreement marker when both signals spike.
+- Prices: Yahoo (Stooq is blocked from Railway), 5 years, SPY benchmark.
+- Hypothesis tests (`validation.js`, `research.js`): event study with placebo-shift null, volatility-matched control, lead-lag,
+  verdict levels. The engine was checked on synthetic worlds with known truth; two biases were found and fixed (control
+  exclusion; volatility clustering misread as prediction -> "marker" verdict). Reddit is tested forward through a ledger.
+- UI: Radar (Wikipedia column, groups, agreement), Stock (Reddit + Wikipedia + price, article editor, past spikes),
+  Research, Settings (watchlist, article mapping, Slack placeholder), Data (per-source table with Run now).
+- 115 backend tests pass against real Postgres.

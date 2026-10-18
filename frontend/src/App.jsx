@@ -10,6 +10,8 @@ import { SessionContext, StatusProvider } from './lib.jsx';
 // The chart pages pull in Recharts, so they load on demand and the Radar stays light
 const DataHealth = lazy(() => import('./DataHealth.jsx'));
 const Stock = lazy(() => import('./Stock.jsx'));
+const Research = lazy(() => import('./Research.jsx'));
+const Settings = lazy(() => import('./Settings.jsx'));
 
 export default function App() {
   // undefined = still checking the session, null = signed out
@@ -55,7 +57,9 @@ export default function App() {
           </header>
           <nav className="tabs" aria-label="Main">
             <NavLink to="/" end>Radar</NavLink>
+            <NavLink to="/research">Research</NavLink>
             <NavLink to="/data">Data</NavLink>
+            <NavLink to="/settings">Settings</NavLink>
             <NavLink to="/notes">Notes</NavLink>
           </nav>
           <main>
@@ -63,6 +67,8 @@ export default function App() {
             <Routes>
               <Route path="/" element={<Radar />} />
               <Route path="/stock/:ticker" element={<Stock />} />
+              <Route path="/research" element={<Research />} />
+              <Route path="/settings" element={<Settings />} />
               <Route path="/data" element={<DataHealth />} />
               <Route path="/notes" element={<Notes key={user.id} onUnauthorized={expire} />} />
               <Route path="*" element={<p className="banner err">Page not found.</p>} />

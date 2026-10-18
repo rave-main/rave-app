@@ -1,5 +1,7 @@
 import { Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { freshness } from './Freshness.jsx';
+import { useState } from 'react';
+import { api } from './api.js';
 import { ago, clock, dateTime, num, usePoll, useStatus, useTick } from './lib.jsx';
 
 const Stat = ({ title, value, sub, tone }) => (
@@ -9,6 +11,42 @@ const Stat = ({ title, value, sub, tone }) => (
     <small>{sub}</small>
   </div>
 );
+
+function Sources() {
+  const { data, reload } = usePoll('/rave/sources', 60000);
+  const [busy, setBusy] = useState('');
+  if (!data) return null;
+  async function run(kind) {
+    setBusy(kind);
+    try { await api(`/rave/jobs/${kind}/run`, { method: 'POST' }); } catch { /* shown by status below */ }
+    setTimeout(() => { setBusy(''); reload(); }, 4000);
+  }
+  return (
+    <section className="card">
+      <h2>Data sources <small>each runs on a fixed schedule and catches up after any restart</small></h2>
+      <div className="table-wrap">
+        <table className="runs">
+          <thead><tr><th>Source</th><th>Schedule</th><th>Last success</th><th>Next</th><th>State</th><th /></tr></thead>
+          <tbody>
+            {data.map((s) => (
+              <tr key={s.kind}>
+                <td>{s.label}</td>
+                <td><small>{s.cadence}</small></td>
+                <td>{s.lastSuccess ? dateTime(s.lastSuccess.startedAt) : <span className="muted">never</span>}</td>
+                <td>{s.nextScheduledAt ? dateTime(s.nextScheduledAt) : '—'}</td>
+                <td>
+                  <span className={`chip ${s.stale ? 'failed' : 'ok'}`}>{s.stale ? 'stale' : 'fresh'}</span>
+                  {s.lastRun?.status === 'failed' && <small className="err-text"> {s.lastRun.error}</small>}
+                </td>
+                <td><button type="button" disabled={busy === s.kind} onClick={() => run(s.kind)}>{busy === s.kind ? 'Started…' : 'Run now'}</button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
 
 export default function DataHealth() {
   useTick(15000);
@@ -57,6 +95,8 @@ export default function DataHealth() {
           sub={ok ? `${num(ok.tickersSeen)} tickers · ${ok.pagesFetched}/${ok.pagesTotal} pages · ${num(ok.marketTotalMentions)} mentions in total` : ''}
         />
       </section>
+
+      <Sources />
 
       {status.lastRun?.status === 'failed' && (
         <p className="banner err">Latest run failed: {status.lastRun.error}. RAVE keeps the previous data and retries at the next check.</p>

@@ -11,6 +11,7 @@ const { runRecorded } = require('./scheduler');
 const { runDiagnostics } = require('./diagnostics');
 const { loadWikiSeries } = require('./wiki');
 const { ledgerSummary } = require('./research');
+const { loadPrices } = require('./prices');
 
 const STALE_AFTER_MIN = 90; // the collector runs every 30 minutes
 const EXPECTED_INTERVAL_MIN = 30;
@@ -63,7 +64,13 @@ function raveRouter(pool) {
     const latest = series[series.length - 1] || null;
     const { rows: [m] } = await pool.query('SELECT article, status, confidence, source, extract FROM wiki_pages WHERE ticker = $1', [ticker]);
     const wseries = m?.article ? (await loadWikiSeries(pool, [m.article])).get(m.article) : [];
+    const priceRows = (await loadPrices(pool, [ticker], { fromDay: new Date(Date.now() - 400 * 86400000).toISOString().slice(0, 10) })).get(ticker);
+    const { rows: spikes } = await pool.query(
+      `SELECT detected_at AS "detectedAt", label, ratio, z, mentions, wiki_label AS "wikiLabel", entry_day::text AS "entryDay", outcomes FROM spike_events WHERE ticker = $1 ORDER BY detected_at DESC LIMIT 20`, [ticker]
+    );
     res.json({
+      prices: priceRows.map((p) => ({ day: p.day, close: p.close })),
+      spikes,
       wiki: {
         article: m?.article || null, status: m?.status || 'pending', confidence: m?.confidence || 'none', source: m?.source || 'auto', extract: m?.extract || null,
         scores: m?.article ? scoreStock(wseries, { ticker, source: 'wiki' }) : null,

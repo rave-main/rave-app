@@ -16,7 +16,24 @@ const sortValue = {
   dod: (r) => r.dayOverDay?.ratio ?? -1,
   ratio: (r, h) => r.scores[h].adjusted?.ratio ?? r.scores[h].raw?.ratio ?? -1,
   rank: (r) => (r.ranked ? -r.rank : -Infinity), // a better (smaller) rank sorts higher
+  wiki: (r, h) => ORDER[r.wiki?.scores?.[h]?.label] ?? -1,
 };
+
+// Wikipedia page-view signal for one stock at the chosen horizon
+function WikiCell({ r, horizon }) {
+  const w = r.wiki;
+  if (!w || !w.article) {
+    return <span className="muted" title={w?.status === 'pending' ? 'Looking for this company\'s Wikipedia article' : 'No Wikipedia article matched (fix it in Settings)'}>{w?.status === 'pending' ? '…' : 'no article'}</span>;
+  }
+  const s = w.scores?.[horizon];
+  if (!s) return <span className="muted">…</span>;
+  const m = s.adjusted || s.raw;
+  return (
+    <span title={`${w.article}: ${s.explanation}`}>
+      <LabelChip label={s.label} />{m && s.status === 'ok' && s.label !== 'Quiet' && s.label !== 'Low volume' ? <small> {times(m.ratio)}</small> : null}
+    </span>
+  );
+}
 
 // For rank, a smaller number is better: ▲ green = moved up the leaderboard, ▼ red = moved down
 function RankMove({ now, before }) {
@@ -48,7 +65,7 @@ export default function Radar() {
     if (!stocks) return [];
     const needle = q.trim().toLowerCase();
     const list = stocks.filter((r) =>
-      (group === 'all' || (group === 'controls' ? r.isControl : !r.isControl)) &&
+      (group === 'all' || (group === 'controls' ? r.isControl : group === 'watchlist' ? r.isWatchlist && !r.isControl : !r.isWatchlist)) &&
       (labelFilter === 'all' || r.scores[horizon].label === labelFilter) &&
       (!needle || r.ticker.toLowerCase().includes(needle) || r.name.toLowerCase().includes(needle))
     );
@@ -103,7 +120,7 @@ export default function Radar() {
             ))}
           </div>
           <div className="seg" aria-label="Group">
-            {[['all', 'All'], ['hype', 'Hype'], ['controls', 'Controls']].map(([k, text]) => (
+            {[['all', 'All'], ['watchlist', 'Watchlist'], ['controls', 'Controls'], ['other', 'Other']].map(([k, text]) => (
               <button key={k} className={group === k ? 'on' : ''} onClick={() => set({ group: k })}>{text}</button>
             ))}
           </div>
@@ -127,7 +144,8 @@ export default function Radar() {
             <thead>
               <tr>
                 {th('ticker', 'Stock')}
-                {th('label', 'Signal')}
+                {th('label', 'Reddit')}
+                {th('wiki', 'Wikipedia')}
                 {th('mentions', 'Mentions 24h', 'num')}
                 {th('dod', 'vs 24h', 'num')}
                 <th className="sortable num" onClick={() => sortBy('ratio')} title="Today compared with this stock's own usual level, adjusted for overall Reddit chatter" aria-sort={sort === 'ratio' ? (dir === 'asc' ? 'ascending' : 'descending') : 'none'}>vs normal{sort === 'ratio' && <span className="sort-ind">{dir === 'asc' ? ' ↑' : ' ↓'}</span>}</th>
@@ -143,7 +161,8 @@ export default function Radar() {
                 return (
                   <tr key={r.ticker} onClick={() => navigate(`/stock/${r.ticker}`)} tabIndex={0} onKeyDown={(e) => e.key === 'Enter' && navigate(`/stock/${r.ticker}`)}>
                     <td><Link to={`/stock/${r.ticker}`} onClick={(e) => e.stopPropagation()} className="tk"><strong>{r.ticker}</strong></Link><small>{r.name}{r.isControl ? ' · control' : ''}</small></td>
-                    <td><LabelChip label={s.label} />{s.unconfirmed && <small title="Waiting for the next snapshot to confirm"> unconfirmed</small>}</td>
+                    <td><LabelChip label={s.label} />{s.unconfirmed && <small title="Waiting for the next snapshot to confirm"> unconfirmed</small>}{horizon === 'short' && r.agreement === 'both' && <span className="both" title="Reddit AND Wikipedia both show a spike">●●</span>}</td>
+                    <td><WikiCell r={r} horizon={horizon} /></td>
                     <td className="num">{r.fetchedAt ? (r.ranked ? num(r.mentions) : <span className="muted" title="Not on the ApeWisdom leaderboard">0</span>) : '—'}</td>
                     <td className="num">{r.dayOverDay ? <>{r.dayOverDay.change > 0 ? '+' : ''}{r.dayOverDay.change}{r.dayOverDay.ratio ? <small> {pct(r.dayOverDay.ratio)}</small> : <small> new</small>}</> : '—'}</td>
                     <td className="num" title={s.explanation}>{s.label === 'Low volume' ? <span className="muted" title="Too few mentions to rate">—</span> : m ? <>{times(m.ratio)}<small> {unusual(m.z)}</small></> : <span className="muted">warming up</span>}</td>
@@ -153,12 +172,14 @@ export default function Radar() {
                   </tr>
                 );
               })}
-              {!rows.length && <tr><td colSpan="8" className="muted center">No stocks match these filters.</td></tr>}
+              {!rows.length && <tr><td colSpan="9" className="muted center">No stocks match these filters.</td></tr>}
             </tbody>
           </table>
         </div>
+        <p className="count muted">{rows.length} of {stocks.length} tracked stocks (the watchlist plus every stock that reached 5 Reddit mentions a day this week). All ~800 leaderboard stocks are stored.</p>
         <p className="foot">
-          <strong>Mentions 24h</strong>: Reddit posts and comments mentioning the ticker in the last 24 hours (ApeWisdom). <strong>vs 24h</strong>: change from a day ago.
+          <strong>Reddit</strong> and <strong>Wikipedia</strong> are two independent signals: Reddit mentions (ApeWisdom) and daily views of the company's Wikipedia article. <span className="both">●●</span> means both show a spike.
+          <strong> Mentions 24h</strong>: Reddit posts and comments mentioning the ticker in the last 24 hours (ApeWisdom). <strong>vs 24h</strong>: change from a day ago.
           <strong> vs normal</strong>: today against this stock’s own usual level, adjusted for overall Reddit chatter (hover a value for the full reasoning).
           <strong> Low volume</strong>: typically fewer than 5 mentions a day, too few to separate a real change from chance, so it is not rated.
         </p>

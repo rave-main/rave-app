@@ -116,6 +116,8 @@ test('single-stock endpoint works for any ticker that has been on the leaderboar
   const gme = await agent.get('/api/rave/stocks/GME').expect(200);
   assert.equal(gme.body.name, 'GameStop');
   assert.equal(gme.body.isWatchlist, true);
+  assert.ok(Array.isArray(gme.body.prices) && Array.isArray(gme.body.spikes), 'price history and past spikes are always arrays');
+  assert.equal(gme.body.wiki.article, null);
   await agent.get('/api/rave/stocks/NOPE').expect(404);
 });
 
