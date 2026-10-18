@@ -176,6 +176,31 @@ const migrations = [
      views INTEGER[] NOT NULL,
      PRIMARY KEY (article, month)
    );`,
+
+  // The matcher improved (entities, parentheticals, fund names): retry automatic matches that did not resolve
+  `UPDATE wiki_pages SET checked_at = '2000-01-01' WHERE source = 'auto' AND status <> 'resolved';`,
+
+  // Daily prices for the tracked stocks (and the SPY benchmark) and how far each ticker is synced
+  `CREATE TABLE prices (
+     ticker TEXT NOT NULL,
+     day DATE NOT NULL,
+     open DOUBLE PRECISION NOT NULL,
+     high DOUBLE PRECISION NOT NULL,
+     low DOUBLE PRECISION NOT NULL,
+     close DOUBLE PRECISION NOT NULL,
+     adj_close DOUBLE PRECISION NOT NULL,
+     volume DOUBLE PRECISION NOT NULL,
+     source TEXT NOT NULL,
+     PRIMARY KEY (ticker, day)
+   );
+   CREATE TABLE price_sync (
+     ticker TEXT PRIMARY KEY,
+     full_at TIMESTAMPTZ,
+     last_day DATE,
+     source TEXT,
+     error TEXT,
+     checked_at TIMESTAMPTZ NOT NULL DEFAULT now()
+   );`,
 ];
 
 function createPool(connectionString = process.env.DATABASE_URL) {

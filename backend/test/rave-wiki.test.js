@@ -66,7 +66,13 @@ test('candidate titles strip legal suffixes and try the common company title for
   assert.ok(wiki.candidateTitles('Micron Technology').includes('Micron Technology'));
   assert.ok(wiki.candidateTitles('AMC Entertainment Holdings').includes('AMC Entertainment'));
   assert.deepEqual(wiki.candidateTitles(''), []);
-  assert.ok(wiki.candidateTitles('Foo').length <= 12);
+  assert.ok(wiki.candidateTitles('Foo').length <= 18);
+  // cleaned-up bases for the awkward names seen on the real leaderboard
+  assert.ok(wiki.candidateTitles('Meta Platforms (Facebook)').includes('Meta Platforms'));
+  assert.ok(wiki.candidateTitles('SPDR S&amp;P 500 ETF Trust').includes('SPDR S&P 500 ETF Trust'));
+  assert.ok(wiki.candidateTitles('Invesco QQQ ETF').includes('Invesco QQQ'));
+  const vt = wiki.candidateTitles('Vanguard Group, Inc. - Vanguard Total World Stock ETF');
+  assert.ok(vt.includes('Vanguard Total World Stock ETF') && vt.includes('Vanguard Total World Stock'));
 });
 
 test('judgeExtract accepts listed companies and funds and rejects disambiguation pages and unrelated articles', () => {
@@ -222,7 +228,8 @@ test('run-now and diagnostics endpoints require sign-in, start jobs, and report 
   await agent.post('/api/rave/jobs/nope/run').expect(404);
   const { runDiagnostics } = require('../src/rave/diagnostics');
   const results = await runDiagnostics([], { fetchImpl: async (url) => resp(url.includes('wikimedia') ? { items: [{ views: 5 }] } : url.includes('wikipedia.org') ? { query: { pages: [{ title: 'GameStop' }] } } : { results: [{}] }) });
-  assert.deepEqual(results.map((r) => [r.source, r.ok]), [['apewisdom', true], ['wikipedia-api', true], ['wikimedia-pageviews', true]]);
+  assert.deepEqual(results.slice(0, 3).map((r) => [r.source, r.ok]), [['apewisdom', true], ['wikipedia-api', true], ['wikimedia-pageviews', true]]);
+  assert.deepEqual(results.slice(3).map((r) => r.source), ['yahoo-prices', 'stooq-prices'], 'price sources are probed too');
   const blocked = await runDiagnostics([], { fetchImpl: async () => { const e = new Error('fetch failed'); e.cause = { code: 'ENOTFOUND' }; throw e; } });
   assert.ok(blocked.every((r) => !r.ok && /ENOTFOUND/.test(r.detail)));
 });

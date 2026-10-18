@@ -40,24 +40,36 @@ async function getJson(url, { fetchImpl = fetch, retries = 4, timeoutMs = 20000,
 // ---------- 1. which article? ----------
 const SUFFIXES = /[\s,]+(inc\.?|incorporated|corp\.?|corporation|co\.?|company|ltd\.?|limited|plc|llc|l\.p\.|lp|n\.v\.|nv|s\.a\.|sa|ag|se|holdings?|holding|class [a-c]|common stock|ordinary shares?|adr|ads|depositary shares?)\b\.?/gi;
 
+const decodeEntities = (t) => t.replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#0?39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+
 // Titles to try, most specific first. Wikipedia titles for companies vary ("Tesla, Inc.", "Apple Inc.", "Micron Technology").
+// ApeWisdom names can carry HTML entities ("S&amp;P"), parentheticals ("Meta Platforms (Facebook)") and fund-family
+// prefixes ("Vanguard Group, Inc. - Vanguard Total World Stock ETF"), so several cleaned-up bases are tried.
 function candidateTitles(name) {
   if (!name) return [];
-  const raw = String(name).replace(/\s+/g, ' ').trim();
-  const stripped = raw.replace(SUFFIXES, '').replace(/[\s,.]+$/, '').trim();
+  const raw = decodeEntities(String(name)).replace(/\s+/g, ' ').trim();
+  const noParen = raw.replace(/\s*\([^)]*\)/g, '').trim();
+  const afterDash = raw.includes(' - ') ? raw.split(' - ').pop().trim() : null;
+  const strip = (t) => t.replace(SUFFIXES, '').replace(/[\s,.]+$/, '').trim();
+  const noFundWord = (t) => t.replace(/\s+(ETF Trust|ETF|Index Fund|Fund|Trust)$/i, '').trim();
+  const bases = [strip(raw), raw, strip(noParen), noParen, afterDash && strip(afterDash), afterDash, afterDash && noFundWord(afterDash), noFundWord(strip(raw)), noFundWord(raw)];
   const out = [];
-  const add = (t) => t && !out.includes(t) && out.push(t);
-  for (const base of [stripped, raw]) {
+  const add = (t) => t && t.length > 1 && !out.includes(t) && out.push(t);
+  for (const base of bases) {
+    if (!base) continue;
     add(`${base}, Inc.`);
     add(`${base} Inc.`);
     add(`${base} (company)`);
     add(base);
+  }
+  for (const base of bases.slice(0, 4)) {
+    if (!base) continue;
     add(`${base} Corporation`);
     add(`${base} Holdings`);
     add(`${base} Group`);
     add(`${base} Technologies`);
   }
-  return out.slice(0, 12);
+  return out.slice(0, 18);
 }
 
 const POSITIVE = /\b(company|corporation|multinational|conglomerate|manufacturer|retailer|bank|holding company|exchange-traded|ETF|index fund|investment|technology|software|semiconductor|airline|automaker|automotive|pharmaceutical|biotechnology|chain|brand|enterprise|firm|trust|fund|platform|producer|provider|operator|developer|supplier)\b/i;

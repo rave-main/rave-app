@@ -2,6 +2,7 @@
 const { every } = require('./scheduler');
 const { runCollection } = require('./collector');
 const { runWikipedia } = require('./wikijob');
+const { runPrices } = require('./pricejob');
 
 function buildJobs() {
   return [
@@ -21,6 +22,14 @@ function buildJobs() {
       times: ['04:30', '16:30'],
       staleAfterMs: 30 * 60 * 60 * 1000,
       run: (pool, ctx) => runWikipedia(pool, ctx),
+    },
+    {
+      kind: 'prices',
+      label: 'Stock prices (Yahoo, Stooq fallback)',
+      cadence: 'twice a day, 12:30 and 22:30 UTC (the US market closes at 20:00-21:00 UTC); history backfilled 5 years',
+      times: ['12:30', '22:30'],
+      staleAfterMs: 30 * 60 * 60 * 1000,
+      run: (pool, ctx) => runPrices(pool, ctx),
     },
   ];
 }
