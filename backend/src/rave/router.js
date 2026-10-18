@@ -9,7 +9,7 @@ const { runCollection } = require('./collector');
 const { runRecorded } = require('./scheduler');
 const { runDiagnostics } = require('./diagnostics');
 const { loadWikiSeries } = require('./wiki');
-const { ledgerSummary } = require('./research');
+const { ledgerSummary, loadBacktestData } = require('./research');
 const { loadPrices } = require('./prices');
 
 const STALE_AFTER_MIN = 90; // the collector runs every 30 minutes
@@ -139,6 +139,18 @@ function raveRouter(pool) {
   // Can this deployment reach each external source right now?
   router.get('/diagnostics', wrap(async (req, res) => {
     res.json({ at: new Date().toISOString(), results: await runDiagnostics() });
+  }));
+
+  // Raw research data for offline analysis: Wikipedia daily views and daily prices per stock, in pages of `limit` stocks
+  router.get('/export/backtest', wrap(async (req, res) => {
+    const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 40, 1), 100);
+    const { series, bench } = await loadBacktestData(pool);
+    res.json({
+      total: series.length, offset,
+      bench: offset === 0 ? bench.map((b) => [b.day, b.open, b.high, b.low, b.close, b.volume]) : undefined,
+      stocks: series.slice(offset, offset + limit).map((s) => ({ ticker: s.ticker, article: s.article, startDay: s.startDay, views: s.values, prices: s.prices.map((p) => [p.day, p.open, p.high, p.low, p.close, p.volume]) })),
+    });
   }));
 
   // Research results: the latest Wikipedia backtest and the Reddit forward ledger
