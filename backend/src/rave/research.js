@@ -10,6 +10,7 @@ const { loadWikiSeries } = require('./wiki');
 const { loadPrices } = require('./prices');
 const { scoredStocks, listStocks } = require('./tracked');
 const { median } = require('./stats');
+const { runStrategyLab } = require('./strategy');
 
 const BENCHMARK = 'SPY';
 const DAY = 86400000;
@@ -80,41 +81,60 @@ async function runResearch(pool, { log = console, B = 1000 } = {}) {
     seconds: Math.round((Date.now() - started) / 1000),
   };
   await pool.query(`INSERT INTO validation_runs (kind, params, results) VALUES ('wiki_backtest', $1, $2)`, [JSON.stringify({ B, lagDays: [2, 1], minLabel: 'Hot', cooldownDays: 10 }), JSON.stringify(results)]);
-  return { status: 'ok', tickers: series.length, events: conservative.events, verdict: results.verdict.conservative.level, seconds: results.seconds };
+  // The strategy lab: what drives big swings, up or down, and would a simple rule have made money
+  const lab = runStrategyLab({ series, bench });
+  await pool.query(`INSERT INTO validation_runs (kind, params, results) VALUES ('strategy_lab', $1, $2)`, [JSON.stringify({ hold: 5 }), JSON.stringify({ ...lab, caveats: CAVEATS })]);
+  return { status: 'ok', lab: lab.status, labSpikes: lab.counts?.spikes, tickers: series.length, events: conservative.events, verdict: results.verdict.conservative.level, seconds: results.seconds };
 }
 
 // ---------- 2. forward ledger ----------
-// Records Hot/Extreme Reddit spikes (short horizon, confirmed) for tracked stocks, once per stock per 7 days
+// Two paper-trading ledgers with frozen rules, started the day they were added, so they are honest out-of-sample tests:
+//  - Reddit: Hot/Extreme spikes (short horizon, confirmed), once per stock per 7 days, bought at the next US open
+//  - Wikipedia: Extreme page-view spikes, once per stock per 10 days, bought at the open of the day after next (the page
+//    views for a day are published the day after, which is the same timing the backtest assumes)
 async function recordSpikes(pool) {
   const stocks = await scoredStocks(pool);
   const { rows: [{ run }] } = await pool.query(`SELECT max(id) AS run FROM collection_runs WHERE kind = 'apewisdom' AND status = 'success'`);
   let added = 0;
   for (const s of stocks) {
     const sh = s.scores.short;
-    if (sh.status !== 'ok' || !['Hot', 'Extreme'].includes(sh.label) || sh.unconfirmed) continue;
-    const m = sh.adjusted || sh.raw;
-    const { rowCount } = await pool.query(
-      `INSERT INTO spike_events (ticker, detected_at, label, ratio, z, mentions, baseline, explanation, wiki_label, run_id)
-       SELECT $1, now(), $2, $3, $4, $5, $6, $7, $8, $9
-       WHERE NOT EXISTS (SELECT 1 FROM spike_events WHERE ticker = $1 AND detected_at > now() - interval '7 days')`,
-      [s.ticker, sh.label, m.ratio, m.z, s.mentions, sh.raw.baselineMedian, sh.explanation, s.wiki?.scores?.short?.label || null, run]
-    );
-    added += rowCount;
+    if (sh.status === 'ok' && ['Hot', 'Extreme'].includes(sh.label) && !sh.unconfirmed) {
+      const m = sh.adjusted || sh.raw;
+      const { rowCount } = await pool.query(
+        `INSERT INTO spike_events (ticker, detected_at, label, ratio, z, mentions, baseline, explanation, wiki_label, run_id, source)
+         SELECT $1, now(), $2, $3, $4, $5, $6, $7, $8, $9, 'reddit'
+         WHERE NOT EXISTS (SELECT 1 FROM spike_events WHERE ticker = $1 AND source = 'reddit' AND detected_at > now() - interval '7 days')`,
+        [s.ticker, sh.label, m.ratio, m.z, s.mentions, sh.raw.baselineMedian, sh.explanation, s.wiki?.scores?.short?.label || null, run]
+      );
+      added += rowCount;
+    }
+    const wk = s.wiki?.scores?.short;
+    if (wk && wk.status === 'ok' && wk.label === 'Extreme' && s.wiki.views) {
+      const m = wk.adjusted || wk.raw;
+      const { rowCount } = await pool.query(
+        `INSERT INTO spike_events (ticker, detected_at, label, ratio, z, mentions, baseline, explanation, wiki_label, run_id, source)
+         SELECT $1, now(), $2, $3, $4, $5, $6, $7, $2, $8, 'wiki'
+         WHERE NOT EXISTS (SELECT 1 FROM spike_events WHERE ticker = $1 AND source = 'wiki' AND detected_at > now() - interval '10 days')`,
+        [s.ticker, wk.label, m.ratio, m.z, s.wiki.views.now, wk.raw.baselineMedian, wk.explanation, run]
+      );
+      added += rowCount;
+    }
   }
   return added;
 }
 
 // Entry = open of the first trading day that opens AFTER the signal time (13:30 UTC is the earliest US open)
-function entryCandidateDay(detectedAt) {
+function entryCandidateDay(detectedAt, source = 'reddit') {
   const t = new Date(detectedAt).getTime();
   const dayStart = Math.floor(t / DAY) * DAY;
+  if (source === 'wiki') return dayOf(dayStart + DAY); // the spike day is yesterday; buy two days after it
   return dayOf(t - dayStart < MARKET_OPEN_UTC_MS ? dayStart : dayStart + DAY);
 }
 
 // Fills in entry and outcomes for ledger events as prices become available
 async function updateLedger(pool) {
   const { rows: events } = await pool.query(
-    `SELECT id, ticker, detected_at, outcomes FROM spike_events
+    `SELECT id, ticker, detected_at, outcomes, source FROM spike_events
      WHERE detected_at > now() - interval '120 days' AND (outcomes IS NULL OR jsonb_array_length(jsonb_path_query_array(outcomes, '$.*')) < 3)`
   );
   if (!events.length) return { updated: 0 };
@@ -126,7 +146,7 @@ async function updateLedger(pool) {
     const rows = prices.get(ev.ticker);
     if (!rows || rows.length < 5 || bench.n < 5) continue;
     const px = v.indexPrices(rows);
-    const e = v.firstTradingOnOrAfter(px, entryCandidateDay(ev.detected_at));
+    const e = v.firstTradingOnOrAfter(px, entryCandidateDay(ev.detected_at, ev.source));
     if (e < 0) continue;
     const outcomes = {};
     for (const h of v.HORIZONS) {
@@ -141,10 +161,10 @@ async function updateLedger(pool) {
   return { updated };
 }
 
-async function ledgerSummary(pool) {
+async function ledgerSummary(pool, source = 'reddit') {
   const { rows: events } = await pool.query(
     `SELECT id, ticker, detected_at AS "detectedAt", label, ratio, z, mentions, baseline, wiki_label AS "wikiLabel", entry_day::text AS "entryDay", entry_open AS "entryOpen", outcomes, explanation
-     FROM spike_events ORDER BY detected_at DESC LIMIT 200`
+     FROM spike_events WHERE source = $1 ORDER BY detected_at DESC LIMIT 200`, [source]
   );
   const mean = (a) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : null);
   const per = {};

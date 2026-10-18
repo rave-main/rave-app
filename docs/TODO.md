@@ -7,6 +7,9 @@ that follow attention spikes, then see whether they can be split into up and dow
 money historically. Decided: alerts stay in the backlog; Yahoo stays the only price source; Railway stays on the free trial for now
 (still ends about 17 Nov 2026, noted in HANDOVER). On approval, also save this as `docs/TODO.md` and link it from `docs/HANDOVER.md`.
 
+## STATUS (2026-10-18)
+Part 1 is done (two filters, rating + measure + change cells, fund and word-ticker flags, stars, top 10, market context, Wikipedia match counts). Part 2 stages A to C were done with the strategy lab (see METHODOLOGY.md): no robust profitable rule was found. Still open from Part 2: real earnings dates (fetch from Railway, Yahoo is blocked from the sandbox), Reddit-based tests once there is history, the forward ledgers (running), and a pristine holdout from new data.
+
 ## Part 1: Radar and product fixes (do first)
 1. **Two label filters.** Replace the single "Any label" dropdown with "Reddit: ..." and "Wikipedia: ..." dropdowns (Rising / Hot /
    Extreme / Quiet / Low volume / Warming up), each showing a count, kept in the URL. In `Radar.jsx` filter on

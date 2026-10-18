@@ -244,6 +244,9 @@ const migrations = [
   `DROP TABLE watchlist;
    UPDATE tickers SET name = replace(replace(replace(replace(name, '&amp;', '&'), '&quot;', '"'), '&lt;', '<'), '&gt;', '>') WHERE name LIKE '%&%;%';
    UPDATE wiki_pages SET checked_at = 'epoch' WHERE source = 'auto' AND status <> 'resolved';`,
+
+  // Two forward-test ledgers: Reddit spikes and Wikipedia spikes
+  `ALTER TABLE spike_events ADD COLUMN source TEXT NOT NULL DEFAULT 'reddit';`,
 ];
 
 function createPool(connectionString = process.env.DATABASE_URL) {

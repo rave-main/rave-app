@@ -1,4 +1,5 @@
 import { CartesianGrid, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { Explain, dateTime, signedPct, signedUsd, usePoll } from './lib.jsx';
 
@@ -92,10 +93,10 @@ function Technical({ b }) {
   );
 }
 
-function Ledger({ ledger }) {
+function Ledger({ ledger, title, intro, kind = 'reddit' }) {
   return (
     <section className="card">
-      <h2>Reddit test, going forward <small>Reddit has no history, so each spike is noted as it happens and judged later</small></h2>
+      <h2>{title} <small>{intro}</small></h2>
       <div className="meter" role="progressbar" aria-label="Spikes with a 5-day result" aria-valuenow={Math.round(ledger.progress * 100)} aria-valuemin="0" aria-valuemax="100"><i style={{ width: `${ledger.progress * 100}%` }} /></div>
       <p className="muted">{ledger.withFiveDayOutcome} of {ledger.needed} spikes have a 5-day result ({ledger.total} spotted so far). RAVE draws no conclusion until it has {ledger.needed}.</p>
       {ledger.events.length > 0 && (
@@ -107,7 +108,7 @@ function Ledger({ ledger }) {
                 <tr key={e.id}>
                   <td>{dateTime(e.detectedAt)}</td>
                   <td><Link to={`/stock/${e.ticker}`}>{e.ticker}</Link></td>
-                  <td>{e.label}{e.wikiLabel && <small> · Wikipedia {e.wikiLabel}</small>}</td>
+                  <td>{e.label}{kind === 'reddit' && e.wikiLabel && <small> · Wikipedia {e.wikiLabel}</small>}</td>
                   <td className="num">{e.entryOpen ? <>{e.entryDay}<small> at ${e.entryOpen.toFixed(2)}</small></> : <span className="muted">pending</span>}</td>
                   {[1, 5, 20].map((h) => <td key={h} className={`num ${e.outcomes?.[h]?.abn >= 0 ? 'up' : 'down'}`}>{e.outcomes?.[h] ? <>{signedPct(e.outcomes[h].abn)}<small> {signedUsd(e.outcomes[h].abn * 1000)}</small></> : <span className="muted">—</span>}</td>)}
                 </tr>
@@ -116,8 +117,145 @@ function Ledger({ ledger }) {
           </table>
         </div>
       )}
-      {!ledger.events.length && <p className="muted">No Hot or Extreme Reddit spikes yet. They appear here by themselves once the 24-hour rating has enough history (about 3 days).</p>}
+      {!ledger.events.length && <p className="muted">No spikes noted yet. They appear here by themselves as soon as one happens.</p>}
       <p className="foot">Gain or loss is compared with the overall market (an S&amp;P 500 fund, SPY). The dollar figure is what it would mean for $1,000 invested.</p>
+    </section>
+  );
+}
+
+const pc = (x, d = 1) => (x === null || x === undefined ? '—' : `${x >= 0 ? '+' : '−'}${Math.abs(x * 100).toFixed(d)}%`);
+const dollars = (x) => (x === null || x === undefined ? '—' : `${x >= 0 ? '+' : '−'}$${Math.abs(Math.round(x)).toLocaleString('en-US')}`);
+const RANGE_COLOURS = ['var(--accent)', 'var(--accent-2)', 'var(--ok)', 'var(--warn)', '#8ab4ff', 'var(--muted)'];
+
+// A figure with its plausible range, coloured when the range excludes zero
+function Gain({ s }) {
+  if (!s || !s.n) return <span className="muted">—</span>;
+  if (s.mean === undefined) return <span className="muted">{s.n} (too few)</span>;
+  const clear = s.ci && (s.ci[0] > 0 || s.ci[1] < 0);
+  return <span className={clear ? (s.mean > 0 ? 'up' : 'down') : ''}>{pc(s.mean)}<small> ({pc(s.ci[0])} to {pc(s.ci[1])})</small></span>;
+}
+
+function Answer({ lab }) {
+  const robust = lab.rules.filter((r) => r.dev.mean > 0 && r.holdout.mean > 0 && r.dev.quartersPositive + r.holdout.quartersPositive >= 0.65 * (r.dev.quarters.length + r.holdout.quarters.length));
+  const bestHold = lab.rules.filter((r) => !r.id.endsWith('Jump')).sort((a, b) => b.holdout.mean - a.holdout.mean)[0];
+  return (
+    <div className={`verdict-card ${robust.length ? 'tone-good' : 'tone-none'} wide`}>
+      <small>The short answer</small>
+      <strong>{robust.length ? 'A rule held up in both periods (treat with care)' : 'No trading rule we tried made money reliably'}</strong>
+      <p>
+        {robust.length
+          ? `${robust.map((r) => r.label).join('; ')}: positive after costs in both the earlier period and the last six months, and in most quarters. Even so, this is a small sample, so it is only worth following in the forward tests below.`
+          : `We tested ${lab.variantsTried} ways of using attention spikes (and two rules that ignore attention). Rules that looked profitable in one period lost money in another, and none was profitable in most quarters after costs. The best of them over the last six months, "${bestHold.label.toLowerCase()}", made ${dollars(bestHold.holdout.totalDollars)} in total, but it lost money in the earlier period (${dollars(bestHold.dev.totalDollars)}), so it is more likely luck than a real edge.`}
+      </p>
+    </div>
+  );
+}
+
+function Swings({ lab }) {
+  const rows = lab.swings.rows;
+  const groups = [...new Set(rows.map((r) => r.volatility))];
+  return (
+    <section className="card">
+      <h2>Step 1: what makes a share price swing? <small>a swing is a move of more than {lab.setup.bigMove * 100}% (up or down, compared with the market) within 5 trading days</small></h2>
+      <p className="lede">We split every day into four groups by how jumpy the share had already been over the previous month, then asked how often a big swing followed. Next to each, the same figure when attention had just spiked.</p>
+      <div className="table-wrap">
+        <table className="runs">
+          <thead><tr><th>How jumpy the share already was</th><th className="num">Big swing, no spike</th><th className="num">Big swing, after a spike</th><th className="num">Typical move, no spike</th><th className="num">Typical move, after a spike</th></tr></thead>
+          <tbody>
+            {groups.map((g) => {
+              const a = rows.find((r) => r.volatility === g && !r.spike);
+              const b = rows.find((r) => r.volatility === g && r.spike);
+              return (
+                <tr key={g}>
+                  <td>{g}</td>
+                  <td className="num">{a ? `${(a.bigShare * 100).toFixed(1)}%` : '—'}<small> of {a?.n.toLocaleString('en-US')} days</small></td>
+                  <td className="num">{b ? `${(b.bigShare * 100).toFixed(1)}%` : '—'}<small> of {b?.n.toLocaleString('en-US')} days</small></td>
+                  <td className="num">{a ? `${(a.typicalMove * 100).toFixed(1)}%` : '—'}</td>
+                  <td className="num">{b ? `${(b.typicalMove * 100).toFixed(1)}%` : '—'}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <p className="foot">Reading it: big swings are mostly about how jumpy a share already is (about 1 in 70 five-day periods for the calmest shares, about 1 in 4 for the jumpiest). An attention spike adds little on top of that. Scheduled events such as company results also cause big swings; we do not yet have results dates, so that is not separated out.</p>
+    </section>
+  );
+}
+
+function Direction({ lab }) {
+  return (
+    <section className="card">
+      <h2>Step 2: after a spike, does the price go up or down? <small>average gain or loss compared with the market over the next 5 trading days, buying 2 days after the spike</small></h2>
+      <p className="lede">If swings cannot be told apart from up and down, they cannot be traded. We looked at {lab.direction.length} situations chosen in advance. With that many looks, one or two will seem special by pure chance, so a result only counts if it holds in both periods.</p>
+      <div className="table-wrap">
+        <table className="runs">
+          <thead><tr><th>Situation</th><th className="num">Spikes (earlier)</th><th className="num">Average gain (range), earlier</th><th className="num">Spikes (last 6 months)</th><th className="num">Average gain (range), last 6 months</th></tr></thead>
+          <tbody>
+            {lab.direction.map((d) => (
+              <tr key={d.label}>
+                <td>{d.label}</td>
+                <td className="num">{d.development.n}</td><td className="num"><Gain s={d.development} /></td>
+                <td className="num">{d.holdout.n}</td><td className="num"><Gain s={d.holdout} /></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="foot">The range is the plausible spread of the true average (95%), found by resampling whole shares. Coloured figures have a range that does not include zero. On shares in general the same measure was {pc(lab.baseline.development.mean)} in the earlier period and {pc(lab.baseline.holdout.mean)} in the last six months.</p>
+    </section>
+  );
+}
+
+function Rules({ lab }) {
+  const data = useMemo(() => {
+    const days = new Map();
+    lab.rules.forEach((r, k) => r.curve.forEach((p) => { const row = days.get(p.day) || { day: p.day }; row[`r${k}`] = p.dollars; days.set(p.day, row); }));
+    return [...days.values()].sort((a, b) => (a.day < b.day ? -1 : 1));
+  }, [lab]);
+  return (
+    <section className="card">
+      <h2>Step 3: would a simple rule have made money? <small>$1,000 in each trade, held 5 trading days, costs included</small></h2>
+      <p className="lede">Each rule trades every spike it matches: $1,000 in the share and an equal amount of the S&amp;P 500 fund (SPY) on the other side, so only the share's gain or loss against the market counts. Costs: {pc(lab.setup.costs.roundTrip + lab.setup.costs.hedge, 2).replace('+', '')} to trade, plus {lab.setup.costs.borrowPerYear * 100}% a year to borrow shares when betting against a spike.</p>
+      <Answer lab={lab} />
+      <div className="table-wrap">
+        <table className="runs">
+          <thead><tr><th>Rule</th><th className="num">Trades</th><th className="num">Per trade, before costs</th><th className="num">After costs</th><th className="num">Total (US$)</th><th className="num">Good quarters</th></tr></thead>
+          <tbody>
+            {lab.rules.flatMap((r, k) => [['Earlier period', r.dev], ['Last 6 months', r.holdout]].map(([p, x], j) => (
+              <tr key={`${r.id}${p}`}>
+                <td>{j === 0 ? <><i className="swatch" style={{ background: RANGE_COLOURS[k] }} /> {r.label}</> : <span className="muted">&nbsp;&nbsp;&nbsp;&nbsp;{p}</span>}{j === 0 && <small className="block muted">{p}</small>}</td>
+                <td className="num">{x.n}</td>
+                <td className="num">{pc(x.grossMean, 2)}</td>
+                <td className={`num ${x.mean > 0 ? 'up' : 'down'}`}>{pc(x.mean, 2)}</td>
+                <td className={`num ${x.totalDollars > 0 ? 'up' : 'down'}`}>{dollars(x.totalDollars)}</td>
+                <td className="num">{x.quartersPositive} of {x.quarters.length}</td>
+              </tr>
+            )))}
+          </tbody>
+        </table>
+      </div>
+      <h3>Running total if $1,000 had gone into every trade</h3>
+      <div className="chart-box">
+        <ResponsiveContainer width="100%" height={280}>
+          <LineChart data={data} margin={{ top: 8, right: 12, left: 4, bottom: 22 }}>
+            <CartesianGrid stroke="var(--border)" vertical={false} />
+            <XAxis dataKey="day" stroke="var(--muted)" tick={{ fontSize: 11 }} minTickGap={50} tickFormatter={(d) => d.slice(0, 7)} label={axisLabel('Date the trade ended', { position: 'insideBottom', offset: -14 })} />
+            <YAxis stroke="var(--muted)" tick={{ fontSize: 11 }} width={72} tickFormatter={(v) => `${v < 0 ? '−' : ''}$${Math.abs(v).toLocaleString('en-US')}`} label={axisLabel('Total profit or loss (US$)', { angle: -90, position: 'insideLeft', offset: -2, style: { textAnchor: 'middle' } })} />
+            <ReferenceLine y={0} stroke="var(--border)" />
+            <ReferenceLine x={data.find((d) => d.day >= lab.setup.holdoutStart)?.day} stroke="var(--warn)" strokeDasharray="4 4" label={{ value: 'last 6 months', fill: 'var(--warn)', fontSize: 10, position: 'insideTopRight' }} />
+            <Tooltip contentStyle={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8 }} formatter={(v, name) => [`$${Number(v).toLocaleString('en-US')}`, lab.rules[Number(name.slice(1))].label]} />
+            {lab.rules.map((r, k) => <Line key={r.id} type="stepAfter" dataKey={`r${k}`} name={`r${k}`} stroke={RANGE_COLOURS[k]} dot={false} connectNulls isAnimationActive={false} />)}
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+      <div className="legend">{lab.rules.map((r, k) => <span key={r.id}><i style={{ background: RANGE_COLOURS[k] }} /> {r.label}</span>)}</div>
+      <Explain title="How sensitive is this to costs?">
+        <div className="table-wrap"><table className="runs"><thead><tr><th>Rule (last 6 months)</th><th className="num">No costs</th><th className="num">0.2% costs</th><th className="num">0.4% costs</th></tr></thead>
+          <tbody>{lab.rules.map((r) => <tr key={r.id}><td>{r.label}</td>{r.holdout.sensitivity.map((v, i) => <td key={i} className={`num ${v > 0 ? 'up' : 'down'}`}>{pc(v, 2)}</td>)}</tr>)}</tbody></table></div>
+        <p>Average gain per trade after the stated trading cost (plus borrowing for bets against a spike).</p>
+      </Explain>
+      <p className="foot">The "last 6 months" were looked at while exploring, so they are not a fully fresh test. The forward tests below, which started when they were added, are.</p>
     </section>
   );
 }
@@ -127,12 +265,20 @@ export default function Research() {
   if (error && !data) return <p className="banner err">Could not load research — {error.message}</p>;
   if (!data) return <p className="muted">Loading…</p>;
   const b = data.backtest;
+  const lab = data.lab?.status === 'ok' ? data.lab : null;
   const ll = b?.status === 'ok' ? b.leadLag.map((r) => ({ lag: r.lag, size: r.size?.r ?? null, volume: r.volume?.r ?? null })) : [];
 
   return (
     <>
       <section className="card">
-        <h2>Does a jump in attention come before big share-price moves?</h2>
+        <h2>Can attention spikes make money? <small>what we found, step by step</small></h2>
+        <p className="lede">We ask three questions in turn: what makes share prices swing, whether a swing can be split into up and down, and whether a simple trading rule would have made money. All of it uses Wikipedia page views (people looking up a company) with about two years of share prices.</p>
+        {!lab && <p className="muted">The analysis runs twice a day and has not produced results yet.</p>}
+      </section>
+      {lab && <><Swings lab={lab} /><Direction lab={lab} /><Rules lab={lab} /></>}
+
+      <section className="card">
+        <h2>The original test <small>spikes compared with ordinary days</small></h2>
         <p className="lede">
           We looked back over the last two years. Each time a company's Wikipedia page views jumped (a "spike"), we asked what the share price did next, compared with the overall market.
         </p>
@@ -177,7 +323,8 @@ export default function Research() {
           </>
         )}
       </section>
-      <Ledger ledger={data.ledger} />
+      <Ledger ledger={data.ledger} title="Reddit test, going forward" intro="Reddit has no history, so each spike is noted as it happens and judged later" />
+      {data.ledgerWiki && <Ledger ledger={data.ledgerWiki} title="Wikipedia test, going forward" intro="The rules above, frozen from the day they were added. This is the fair test: nothing here was chosen after seeing the results" kind="wiki" />}
       <p className="foot center">This is research, not financial advice.</p>
     </>
   );

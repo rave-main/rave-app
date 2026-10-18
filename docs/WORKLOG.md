@@ -157,3 +157,14 @@ met after repeated attempts; results show no signal.
 - Found while changing it: the Wikipedia job's "mostly failing" check counted a list that was capped at 10, so it could never
   trigger at scale. Fixed (`errorCount`).
 - Added `docs/HANDOVER.md`: read it first in a new session.
+
+### 2026-10-18 Release 4: Radar filters and cells; strategy research
+- Radar: separate Reddit and Wikipedia label filters (with counts), each cell shows rating, measure and change (e.g. Hot 60 -10 (-14%)), sort-by menu,
+  fund / word-ticker flags and a funds filter, stars (this browser only), top 10 by mentions, market context line, Wikipedia match counts on the Data page.
+  Hand check of 60 random Wikipedia matches: all plausible. Unmatched (354 of 847) are mostly funds and very small companies.
+- Research: exported raw data and explored offline in Python. Found and fixed two of my own bugs on the way (feature columns overwritten by future returns
+  gave absurd results; caught because the information coefficient was 100%). Result: attention does not predict big swings beyond volatility, spikes are followed by a
+  slightly negative average market-adjusted gain, and no rule survives costs and quarters. Implemented as `strategy.js` with synthetic-truth tests; the Research page
+  now explains it in three steps. Forward ledgers: Reddit and Wikipedia (frozen rule) as the clean out-of-sample test.
+- Incident: a one-line Python helper (`open(p,'w').write(open(p).read()...)`) truncated `rave-research.test.js` to empty and it was committed in e84fc2a, so the
+  suite silently ran 8 tests fewer. Restored from history. Lesson: never write helpers that open for writing before reading.

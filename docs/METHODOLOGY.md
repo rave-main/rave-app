@@ -93,3 +93,31 @@ The site avoids jargon. How the plain words map to the maths: "times normal" = `
 normal ups and downs", 1-2 "a little unusual", 2-3.5 "unusual", over 3.5 "very unusual"); "gain or loss vs market" = the abnormal return
 against SPY; "could it be luck?" = the placebo-shift p-value (under 0.025 "unlikely"); "$ per $1,000" = the average market-adjusted
 return times 1,000. Prices are US dollars; times are the viewer's local time unless a page says UTC.
+
+## Strategy lab (`strategy.js`, Research page steps 1 to 3)
+Question: can attention spikes be turned into money? Fixed procedure, written down before looking at results.
+- **Signal:** Wikipedia page views, robust z (log views against the median and scaled MAD of the previous 28 days) of 4 or more, typical
+  views at least 100 a day; "very strong" is 5 or more. First day of an episode, 10-day cool-down per share.
+- **Timing:** buy at the open of the first trading day on or after spike day + 2 (views for a day are published the next day). Hold 5 trading days.
+  Outcome = the share's gain minus SPY over the same dates (market-adjusted).
+- **Step 1, swings:** a swing is a market-adjusted move over 5 days beyond 10% either way. Days are split into four groups by the
+  share's own volatility over the previous 20 trading days; the share of big swings is compared with and without a spike.
+- **Step 2, direction:** 10 pre-chosen splits of the spikes (strength, price trend before, move on the spike day, closeness to the 1-year
+  high, dollar volume). Average winsorised (2%) gain with a 95% range from resampling whole shares (clusters), earlier period vs last six months.
+- **Step 3, rules:** 4 attention rules (buy every spike, bet against every spike, bet against only very strong spikes, buy spikes after a
+  fall) and 2 rules with no attention data (buy or bet against a one-day jump of 10% or more). Each trade is $1,000 in the share against
+  $1,000 of SPY (market-neutral). Costs: 0.3% to trade the share, 0.02% for the hedge, 5% a year to borrow for shorts. Reported before and
+  after costs, per period, per quarter (a quarter counts if it has 10+ trades), with maximum drawdown.
+- **Holdout:** the last 183 days. NOTE: it was looked at several times while exploring (about 150 variants were examined in total in the
+  Python exploration that preceded the code), so it is not a pristine test. The forward ledgers (Reddit and Wikipedia, frozen rules, started
+  the day they were added) are the clean test.
+- **Verified on synthetic data** (`rave-strategy.test.js`): no effect gives no profitable rule and no extra big swings; a planted fall after spikes is found by the
+  "bet against" rule and not by "buy"; planted extra volatility raises the big-swing share in every volatility group.
+- **Findings on real data (2026-10-18, 340 shares, 1,859 spikes):** (1) big swings follow how jumpy a share already is (about 1.5% of 5-day periods for the calmest
+  quarter, 22% for the jumpiest) and spikes add almost nothing (22.5% vs 25.6% in the jumpiest group); a model of big swings gets an AUC of 0.78 from
+  volatility alone and 0.78 with attention added. (2) After spikes the average market-adjusted gain was slightly negative (-0.2% earlier, -0.8% in the last six
+  months) with no split that was reliable in both periods. (3) No rule was profitable in most quarters after costs; "bet against every spike" lost in the
+  earlier period and won in the last six months, and the no-attention jump rules flip sign the same way, which points to the market regime (2025's hype rally
+  versus 2026), not to an edge. Cross-sectional ranking on attention, and 82 combinations of simple signals, gave nothing beyond chance. Earnings
+  days are a major cause of big swings (28.8% of five-day windows containing an earnings-like volume surge had a big swing, against 8.6%), but Yahoo earnings dates
+  are not reachable from the sandbox, so they are approximated from volume surges in the exploration and not yet used in the lab.

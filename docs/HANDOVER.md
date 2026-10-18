@@ -31,10 +31,13 @@ The owner is not an investment expert: wording must stay simple, in British Engl
 | `tracked.js` | every stock with Reddit score, Wikipedia signal, price; cached per run |
 | `wiki.js`, `wikijob.js` | match stocks to Wikipedia pages, daily page views |
 | `prices.js`, `pricejob.js` | Yahoo prices (only source), 2-year backfill, SPY benchmark |
-| `validation.js`, `research.js` | event study, lead-lag, verdicts; Wikipedia backtest; Reddit forward ledger |
+| `validation.js`, `research.js` | event study, lead-lag, verdicts; Wikipedia backtest; forward ledgers (Reddit and Wikipedia, `spike_events.source`) |
+| `strategy.js` | strategy lab: what drives big swings, up or down, rule backtests with costs and a holdout |
+| `stock-kind.js` | company / fund / ambiguous-word ticker flag |
 | `audit.js`, `diagnostics.js` | integrity re-check; probes of each external source |
 | `router.js` | all `/api/rave/*` endpoints |
 Frontend (`frontend/src`): `Radar.jsx`, `Stock.jsx`, `Research.jsx`, `Data` (`DataHealth.jsx`), `Settings.jsx`, shared `lib.jsx`, styles `App.css`.
+Offline research: `GET /api/rave/export/backtest?offset=&limit=` pages out raw Wikipedia views and prices; the exploration was done in Python (pandas) on that.
 Docs: `METHODOLOGY.md` (the maths), `DATA_PIPELINE.md` (sources, tables, schedule), `COSTS_AND_LIMITS.md`, `WORKLOG.md` (history, newest last).
 
 ## Decisions and why
