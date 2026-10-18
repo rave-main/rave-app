@@ -38,6 +38,9 @@ CLI alternative:
 cd frontend && npx vercel --prod -e VITE_API_URL=https://<your-service>.up.railway.app
 ```
 
+Once the project is linked to the GitHub repo (Vercel GitHub App installed on `rave-main`), every push to `main`
+deploys to production automatically, and pushes to other branches get preview deployments.
+
 ## 4. Lock CORS to the frontend
 
 On Railway, set `FRONTEND_ORIGIN=https://rave-app.vercel.app` (to allow several origins, separate them with commas,
