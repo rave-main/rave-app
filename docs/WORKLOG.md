@@ -42,3 +42,13 @@ met after repeated attempts; results show no signal.
   collector log and /api/rave/status on Railway after the early release.
 - Test gotcha: user names containing digits are rejected by validation (use e.g. "Test Person").
 - Next: CI, then the approved early release of this additive backend to main, then verify on production.
+
+### 2026-10-18 Early release BLOCKED, continuing on the branch
+- Milestone 1 is on the branch at 7af7f07 and CI is green on that exact commit (34 backend tests).
+- `git push origin HEAD:main` (the one early release approved in the plan) was denied by the session's auto-mode
+  permission classifier as a "Production Deploy". Not worked around. Needs the user to either do the push / merge
+  themselves, or add a permission rule that allows pushing to main, or tell me another route (e.g. a pull request
+  they merge). Until then NO RAVE data is being collected (collection only runs in production).
+- Continuing with milestone 2 (scoring) on the branch, which does not depend on the release.
+- Assumption to verify on real data once collecting: ApeWisdom `mentions` is a rolling 24-hour count, so
+  mentions at time t should be close to `mentions_24h_ago` at t + 24h. Scoring is designed around that.
