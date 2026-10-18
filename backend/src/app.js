@@ -5,6 +5,7 @@ const rateLimit = require('express-rate-limit');
 const cookieParser = require('cookie-parser');
 const { authRouter, requireAuth, wrap } = require('./auth');
 const { notesRouter } = require('./notes');
+const { raveRouter } = require('./rave/router');
 
 // FRONTEND_ORIGIN is a comma-separated list; an entry may use one * wildcard in the host,
 // e.g. https://*-rave-ecf1.vercel.app to allow Vercel preview deployments
@@ -79,6 +80,7 @@ function createApp({ pool, frontendOrigin = process.env.FRONTEND_ORIGIN || 'http
 
   app.use('/api/auth', authRouter(pool));
   app.use('/api/notes', requireAuth(pool), notesRouter(pool));
+  app.use('/api/rave', requireAuth(pool), raveRouter(pool));
   app.get('/api/analytics', requireAuth(pool), (req, res) => res.json(analytics));
 
   // ---------- 404 + error handling ----------

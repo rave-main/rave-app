@@ -7,7 +7,7 @@ const TEST_DB = process.env.TEST_DATABASE_URL || 'postgres://postgres:postgres@l
 async function setup() {
   const pool = createPool(TEST_DB);
   await migrate(pool);
-  await pool.query('TRUNCATE users, sessions, notes RESTART IDENTITY CASCADE');
+  await pool.query('TRUNCATE users, sessions, notes, collection_runs, raw_snapshots, snapshots RESTART IDENTITY CASCADE');
   const app = createApp({ pool, frontendOrigin: 'https://app.example,https://*-team.vercel.app' });
   return { pool, app };
 }

@@ -26,6 +26,59 @@ const migrations = [
      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
    );
    CREATE INDEX notes_user_id_idx ON notes(user_id);`,
+
+  // RAVE: watchlist, collection runs, and ApeWisdom snapshots
+  `CREATE TABLE watchlist (
+     ticker TEXT PRIMARY KEY,
+     name TEXT NOT NULL,
+     is_control BOOLEAN NOT NULL DEFAULT false,
+     active BOOLEAN NOT NULL DEFAULT true,
+     added_at TIMESTAMPTZ NOT NULL DEFAULT now()
+   );
+   INSERT INTO watchlist (ticker, name, is_control) VALUES
+     ('GME', 'GameStop', false), ('AMC', 'AMC Entertainment', false), ('PLTR', 'Palantir', false),
+     ('SOFI', 'SoFi Technologies', false), ('RIVN', 'Rivian', false), ('NVDA', 'NVIDIA', false),
+     ('TSLA', 'Tesla', false), ('HOOD', 'Robinhood', false),
+     ('AAPL', 'Apple', true), ('MSFT', 'Microsoft', true);
+   CREATE TABLE collection_runs (
+     id SERIAL PRIMARY KEY,
+     kind TEXT NOT NULL,
+     status TEXT NOT NULL,
+     started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+     finished_at TIMESTAMPTZ,
+     pages_fetched INTEGER,
+     pages_total INTEGER,
+     tickers_seen INTEGER,
+     rows_written INTEGER,
+     market_total_mentions INTEGER,
+     error TEXT
+   );
+   CREATE INDEX collection_runs_kind_started_idx ON collection_runs(kind, started_at DESC);
+   CREATE TABLE raw_snapshots (
+     id SERIAL PRIMARY KEY,
+     run_id INTEGER NOT NULL REFERENCES collection_runs(id) ON DELETE CASCADE,
+     source TEXT NOT NULL,
+     filter TEXT NOT NULL,
+     page INTEGER NOT NULL,
+     fetched_at TIMESTAMPTZ NOT NULL,
+     payload JSONB NOT NULL
+   );
+   CREATE INDEX raw_snapshots_fetched_at_idx ON raw_snapshots(fetched_at);
+   CREATE TABLE snapshots (
+     id BIGSERIAL PRIMARY KEY,
+     run_id INTEGER NOT NULL REFERENCES collection_runs(id) ON DELETE CASCADE,
+     source TEXT NOT NULL DEFAULT 'apewisdom',
+     ticker TEXT NOT NULL,
+     fetched_at TIMESTAMPTZ NOT NULL,
+     ranked BOOLEAN NOT NULL,
+     rank INTEGER,
+     mentions INTEGER NOT NULL,
+     upvotes INTEGER,
+     rank_24h_ago INTEGER,
+     mentions_24h_ago INTEGER,
+     UNIQUE (source, ticker, fetched_at)
+   );
+   CREATE INDEX snapshots_ticker_time_idx ON snapshots(ticker, fetched_at DESC);`,
 ];
 
 function createPool(connectionString = process.env.DATABASE_URL) {
