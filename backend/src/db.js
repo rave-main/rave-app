@@ -157,6 +157,25 @@ const migrations = [
    SELECT w.ticker, w.name, now(), now(), now(), false, 0 FROM watchlist w ON CONFLICT DO NOTHING;
 
    DROP TABLE snapshots;`,
+
+  // Wikipedia page views (supplement to Reddit mentions): ticker -> article mapping, and daily views stored one row
+  // per article per month with 31 day slots (NULL = no data for that day)
+  `CREATE TABLE wiki_pages (
+     ticker TEXT PRIMARY KEY,
+     article TEXT,
+     status TEXT NOT NULL,
+     confidence TEXT NOT NULL,
+     source TEXT NOT NULL DEFAULT 'auto',
+     extract TEXT,
+     rejected_article TEXT,
+     checked_at TIMESTAMPTZ NOT NULL DEFAULT now()
+   );
+   CREATE TABLE wiki_months (
+     article TEXT NOT NULL,
+     month DATE NOT NULL,
+     views INTEGER[] NOT NULL,
+     PRIMARY KEY (article, month)
+   );`,
 ];
 
 function createPool(connectionString = process.env.DATABASE_URL) {

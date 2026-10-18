@@ -25,6 +25,12 @@ const CONFIG = {
   long: { currentDays: 28, minCurrent: 20, baselineFromDay: 28, baselineDays: 730, minBaseline: 28, toleranceMs: 3 * HOUR },
 };
 
+// Reddit readings are 30 minutes apart (a rolling 24h count); Wikipedia views are one complete day per point.
+const PROFILES = {
+  reddit: { noun: 'mentions', shortWindow: 'the last 24 hours', persistence: true, rankInfo: true },
+  wiki: { noun: 'page views', shortWindow: 'the latest full day', persistence: false, rankInfo: false },
+};
+
 const rank = (label) => ['Quiet', 'Rising', 'Hot', 'Extreme'].indexOf(label); // 'Low volume' ranks like unrated (-1)
 const fmt = (n) => (n >= 100 ? Math.round(n).toLocaleString('en-US') : String(Math.round(n * 10) / 10));
 const x = (ratio) => `${fmt(ratio)}×`;
@@ -115,10 +121,10 @@ function confidenceOf(coverage) {
   return coverage >= 1 ? 'high' : coverage >= 0.5 ? 'medium' : 'low';
 }
 
-function describe({ horizon, window, baselineText, view, label, latest, rankText }) {
+function describe({ horizon, window, baselineText, view, label, latest, rankText, noun = 'mentions' }) {
   const { raw, adjusted, market } = view;
   const parts = [
-    `${latest.ticker ? `${latest.ticker}: ` : ''}${x(raw.ratio)} normal over ${window} (${fmt(raw.current)} mentions vs a typical ${fmt(raw.baselineMedian)}, based on ${baselineText}).`,
+    `${latest.ticker ? `${latest.ticker}: ` : ''}${x(raw.ratio)} normal over ${window} (${fmt(raw.current)} ${noun} vs a typical ${fmt(raw.baselineMedian)}, based on ${baselineText}).`,
     `That is ${fmt(Math.abs(raw.z))} robust standard deviations ${raw.z >= 0 ? 'above' : 'below'} normal.`,
   ];
   if (adjusted && market) {
@@ -127,7 +133,7 @@ function describe({ horizon, window, baselineText, view, label, latest, rankText
     );
   }
   if (label === 'Low volume') {
-    parts.push(`It typically gets fewer than ${CONFIG.lowVolume} mentions a day, too few to tell a real change from chance, so it is not rated.`);
+    parts.push(`It typically gets fewer than ${CONFIG.lowVolume} ${noun} a day, too few to tell a real change from chance, so it is not rated.`);
   }
   if (rankText) parts.push(rankText);
   parts.push(`Label: ${label}.`);
@@ -144,7 +150,7 @@ function warmingUp(horizon, reason, extra = {}) {
   return { horizon, status: 'warming_up', label: 'Warming up', confidence: 'low', coverage: 0, raw: null, adjusted: null, market: null, explanation: reason, ...extra };
 }
 
-function scoreShort(series, ticker) {
+function scoreShort(series, ticker, profile = PROFILES.reddit) {
   const cfg = CONFIG.short;
   const latest = series[series.length - 1];
   const now = latest.t;
@@ -189,7 +195,7 @@ function scoreShort(series, ticker) {
 
   // A single-snapshot glitch must not flag a stock: the previous snapshot has to agree at least at Rising level
   const prev = [...series].reverse().find((p) => p.t <= now - cfg.persistenceGapMs);
-  if (rank(label) > 1 && prev) {
+  if (profile.persistence && rank(label) > 1 && prev) {
     const prevLabel = labelFor(viewOf([prev], baseline, { spreadPoints, nDays }), prev.mentions);
     if (rank(prevLabel) < 1) {
       label = 'Rising';
@@ -197,12 +203,12 @@ function scoreShort(series, ticker) {
     }
   }
   result.label = label;
-  result.explanation = describe({ horizon: 'short', window: 'the last 24 hours', baselineText, view, label, latest: { ...latest, ticker }, rankText: rankText(latest) }) +
+  result.explanation = describe({ horizon: 'short', window: profile.shortWindow, baselineText, view, label, latest: { ...latest, ticker }, rankText: profile.rankInfo ? rankText(latest) : '', noun: profile.noun }) +
     (result.unconfirmed ? ' Capped at Rising until the next snapshot confirms it.' : '');
   return result;
 }
 
-function scoreDaily(series, ticker, horizon) {
+function scoreDaily(series, ticker, horizon, profile = PROFILES.reddit) {
   const cfg = CONFIG[horizon];
   const latest = series[series.length - 1];
   const now = latest.t;
@@ -218,20 +224,21 @@ function scoreDaily(series, ticker, horizon) {
   const baselineText = horizon === 'medium' ? `${baseline.length} days over the previous 12 weeks` : `${baseline.length} days of earlier history`;
   return {
     horizon, status: 'ok', label, confidence: confidenceOf(coverage), coverage: Math.min(1, coverage), ...view,
-    explanation: describe({ horizon, window, baselineText, view, label, latest: { ...latest, ticker }, rankText: horizon === 'medium' ? rankText(latest) : '' }),
+    explanation: describe({ horizon, window, baselineText, view, label, latest: { ...latest, ticker }, rankText: horizon === 'medium' && profile.rankInfo ? rankText(latest) : '', noun: profile.noun }),
   };
 }
 
 // Score one stock on all three horizons. `series` need not be prepared; it must be sorted by time.
-function scoreStock(rawSeries, { ticker } = {}) {
+function scoreStock(rawSeries, { ticker, source = 'reddit' } = {}) {
+  const profile = PROFILES[source] || PROFILES.reddit;
   if (!rawSeries.length) {
     const none = (h) => warmingUp(h, 'No data collected yet.', { label: 'No data' });
     return { version: CONFIG.version, short: none('short'), medium: none('medium'), long: none('long'), summary: { label: 'No data', horizon: null } };
   }
   const series = prepare(rawSeries);
-  const short = scoreShort(series, ticker);
-  const medium = scoreDaily(series, ticker, 'medium');
-  const long = scoreDaily(series, ticker, 'long');
+  const short = scoreShort(series, ticker, profile);
+  const medium = scoreDaily(series, ticker, 'medium', profile);
+  const long = scoreDaily(series, ticker, 'long', profile);
   const rated = [short, medium, long].filter((h) => h.status === 'ok');
   const top = rated.reduce((best, h) => (!best || rank(h.label) > rank(best.label) ? h : best), null);
   return {
@@ -241,4 +248,4 @@ function scoreStock(rawSeries, { ticker } = {}) {
   };
 }
 
-module.exports = { scoreStock, CONFIG, prepare, DAY, HOUR };
+module.exports = { scoreStock, CONFIG, PROFILES, prepare, compare, DAY, HOUR };

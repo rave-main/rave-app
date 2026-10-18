@@ -6,6 +6,10 @@ const { auditRuns } = require('./audit');
 const { scoredStocks, dayOverDay } = require('./tracked');
 const { jobsStatus } = require('./scheduler');
 const { buildJobs } = require('./jobs');
+const { runCollection } = require('./collector');
+const { runRecorded } = require('./scheduler');
+const { runDiagnostics } = require('./diagnostics');
+const { loadWikiSeries } = require('./wiki');
 
 const STALE_AFTER_MIN = 90; // the collector runs every 30 minutes
 const EXPECTED_INTERVAL_MIN = 30;
@@ -56,7 +60,14 @@ function raveRouter(pool) {
     const series = (await loadSeries(pool, [ticker])).get(ticker);
     const since = Date.now() - hours * 3600 * 1000;
     const latest = series[series.length - 1] || null;
+    const { rows: [m] } = await pool.query('SELECT article, status, confidence, source, extract FROM wiki_pages WHERE ticker = $1', [ticker]);
+    const wseries = m?.article ? (await loadWikiSeries(pool, [m.article])).get(m.article) : [];
     res.json({
+      wiki: {
+        article: m?.article || null, status: m?.status || 'pending', confidence: m?.confidence || 'none', source: m?.source || 'auto', extract: m?.extract || null,
+        scores: m?.article ? scoreStock(wseries, { ticker, source: 'wiki' }) : null,
+        history: wseries.filter((p) => p.t >= Date.now() - 400 * 86400000).map((p) => ({ t: p.t, views: p.mentions })),
+      },
       ticker: stock.ticker, name: stock.name, isWatchlist: stock.isWatchlist, isControl: stock.isControl,
       latest: latest && { ...latest, dayOverDay: dayOverDay({ mentions: latest.mentions, mentions24hAgo: stock.mentions24hAgo }) },
       scores: scoreStock(series, { ticker }),
@@ -83,6 +94,46 @@ function raveRouter(pool) {
       [limit]
     );
     res.json(rows);
+  }));
+
+  // The ticker -> Wikipedia article mapping, for review (automatic matches are heuristic)
+  router.get('/wiki', wrap(async (req, res) => {
+    const { rows } = await pool.query(
+      `SELECT t.ticker, coalesce(w.name, t.name) AS name, p.article, coalesce(p.status, 'pending') AS status, coalesce(p.confidence, 'none') AS confidence,
+              coalesce(p.source, 'auto') AS source, p.extract, p.rejected_article AS "rejectedArticle", p.checked_at AS "checkedAt",
+              (SELECT max(month) FROM wiki_months m WHERE m.article = p.article) AS "lastMonth"
+       FROM tickers t LEFT JOIN watchlist w ON w.ticker = t.ticker LEFT JOIN wiki_pages p ON p.ticker = t.ticker
+       WHERE w.ticker IS NOT NULL OR p.ticker IS NOT NULL ORDER BY (p.article IS NULL), t.ticker`
+    );
+    res.json(rows);
+  }));
+
+  // Correct (or clear) a ticker's Wikipedia article. A manual choice is never overwritten by the automatic matcher.
+  router.put('/wiki/:ticker', express.json({ limit: '2kb' }), wrap(async (req, res) => {
+    const ticker = req.params.ticker.toUpperCase();
+    const article = req.body?.article === null ? null : String(req.body?.article || '').trim().replace(/_/g, ' ');
+    if (article !== null && (!article || article.length > 200 || /[|<>#{}\[\]]/.test(article))) return res.status(400).json({ error: 'article must be a Wikipedia page title (or null to clear)' });
+    const { rows: [t] } = await pool.query('SELECT 1 FROM tickers WHERE ticker = $1', [ticker]);
+    if (!t) return res.status(404).json({ error: 'Ticker not found' });
+    await pool.query(
+      `INSERT INTO wiki_pages (ticker, article, status, confidence, source, checked_at) VALUES ($1, $2, 'override', 'manual', 'override', now())
+       ON CONFLICT (ticker) DO UPDATE SET article = EXCLUDED.article, status = 'override', confidence = 'manual', source = 'override', checked_at = now()`,
+      [ticker, article]
+    );
+    res.json({ ticker, article, source: 'override', note: 'page views for the new article are fetched at the next Wikipedia run (or run it now from the Data page)' });
+  }));
+
+  // Start a scheduled job right now (it still takes its lock, so it cannot overlap a scheduled run)
+  router.post('/jobs/:kind/run', wrap(async (req, res) => {
+    const job = jobs.find((j) => j.kind === req.params.kind);
+    if (!job) return res.status(404).json({ error: 'Unknown job' });
+    (job.selfRecording ? job.run(pool) : runRecorded(pool, job)).then((r) => console.log(`RAVE ${job.kind} (manual): ${JSON.stringify(r).slice(0, 300)}`)).catch((e) => console.error(`RAVE ${job.kind} (manual) crashed:`, e));
+    res.status(202).json({ started: job.kind, note: 'running in the background; watch /api/rave/sources' });
+  }));
+
+  // Can this deployment reach each external source right now?
+  router.get('/diagnostics', wrap(async (req, res) => {
+    res.json({ at: new Date().toISOString(), results: await runDiagnostics() });
   }));
 
   // Every scheduled source: cadence, last success, next scheduled run, staleness
