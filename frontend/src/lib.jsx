@@ -78,7 +78,11 @@ export const dateTime = (iso) => new Date(iso).toLocaleString([], { month: 'shor
 
 // Money and price changes. Prices are US dollars.
 export const usd = (n) => (n === null || n === undefined ? '—' : `$${n >= 100 ? n.toLocaleString('en-US', { maximumFractionDigits: 0 }) : n.toFixed(2)}`);
-export const signedPct = (x, digits = 1) => (x === null || x === undefined ? '—' : `${x >= 0 ? '+' : '−'}${(Math.abs(x) * 100).toFixed(digits)}%`);
+export const signedPct = (x, digits = 1) => {
+  if (x === null || x === undefined) return '—';
+  const v = (Math.abs(x) * 100).toFixed(digits);
+  return Number(v) === 0 ? `${v}%` : `${x >= 0 ? '+' : '−'}${v}%`;
+};
 export const signedUsd = (x) => (x === null || x === undefined ? '—' : `${x >= 0 ? '+' : '−'}$${Math.abs(Math.round(x)).toLocaleString('en-US')}`);
 
 // A small "what does this mean?" note that opens on click

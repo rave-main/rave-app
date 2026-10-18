@@ -36,11 +36,11 @@ function AfterSpike({ study, title }) {
           <thead>
             <tr>
               <th>Time after buying</th>
-              <th className="num" title="Average size of the share's move, up or down, ignoring direction">Average move (up or down)</th>
+              <th className="num" title="Average size of the share's move, up or down, ignoring direction">Average move</th>
               <th className="num" title="The same measure on ordinary days for the same shares">…on ordinary days</th>
-              <th className="num" title="Gain (+) or loss (−) compared with the overall market, averaged over all spikes">Gain or loss vs market</th>
-              <th className="num" title="What the average gain or loss means for $1,000 invested">Per $1,000 invested</th>
-              <th className="num" title="Could the extra movement just be chance?">Could it be luck?</th>
+              <th className="num" title="Gain (+) or loss (−) compared with the overall market, averaged over all spikes">Vs market</th>
+              <th className="num" title="What the average gain or loss means for $1,000 invested">Per $1,000</th>
+              <th className="num" title="Could the extra movement just be chance?">Bigger move just luck?</th>
               <th className="num">Spikes</th>
             </tr>
           </thead>
@@ -148,7 +148,7 @@ export default function Research() {
             <Explain title="Why 2 days?">Wikipedia only publishes a day's page views once the day has ended, so by the time a spike is known the market has usually already opened. Buying 2 days later is what you could really do; 1 day is shown as the best case.</Explain>
             {b.verdict.conservative.details.map((d) => <p key={d} className="detail">{d}</p>)}
             <AfterSpike study={b.conservative} title="What happened after a spike (buying 2 days later)" />
-            <p className="foot">Average move is how far the share price moved, up or down, over that time. "Gain or loss vs market" is how much better (+) or worse (−) it did than the overall market (an S&amp;P 500 fund, SPY). "Could it be luck?" says whether the extra movement could just be chance. All figures run from the market open on the buying day.</p>
+            <p className="foot">Average move is how far the share price moved, up or down, over that time. "Gain or loss vs market" is how much better (+) or worse (−) it did than the overall market (an S&amp;P 500 fund, SPY). "Bigger move just luck?" says whether the extra movement after a spike could just be chance. All figures run from the market open on the buying day.</p>
 
             <h3>Does attention come before, or after, the price move?</h3>
             <p className="muted">Each point links a jump in Wikipedia views on one day with how big the share price move was on a day earlier or later. Higher means a stronger link. A peak to the right of 0 would mean attention comes first; a peak at or to the left of 0 means the price moves first or at the same time.</p>
