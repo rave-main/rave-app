@@ -1,31 +1,16 @@
+const crypto = require('crypto');
 const apewisdom = require('./apewisdom');
+const { storeRun } = require('./store');
 
 const LOCK_KEY = 727275; // advisory lock so overlapping deploys never collect at the same time
 const SOURCE = 'apewisdom';
 const KIND = 'apewisdom';
-const TOP_N_STORED = 100; // watchlist tickers are always stored; so is the top of the leaderboard
 const MIN_INTERVAL_MS = 10 * 60 * 1000; // restarts and overlapping deploys must not hammer the source
 const ABANDONED_AFTER_MIN = 15;
 const RAW_RETENTION_DAYS = 7; // about 112 KB per run: 7 days is ~40 MB, and the Railway volume is 500 MB
-const INTERVAL_MS = 30 * 60 * 1000;
-const JITTER_MS = 5 * 60 * 1000;
 
-// Rows to store for one run: every watchlist ticker (0 mentions and ranked=false when it is not on the
-// leaderboard) plus the top of the leaderboard so new names can be discovered later.
-function selectRows(leaderboard, watchlist) {
-  const byTicker = new Map(leaderboard.rows.map((r) => [r.ticker, r]));
-  const rows = leaderboard.rows
-    .filter((r) => r.rank <= TOP_N_STORED || watchlist.includes(r.ticker))
-    .map((r) => ({ ...r, ranked: true }));
-  for (const ticker of watchlist) {
-    if (!byTicker.has(ticker)) {
-      rows.push({ ticker, rank: null, mentions: 0, upvotes: null, rank24hAgo: null, mentions24hAgo: null, ranked: false });
-    }
-  }
-  return rows;
-}
-
-async function runCollection(pool, { fetchLeaderboard = apewisdom.fetchLeaderboard, minIntervalMs = MIN_INTERVAL_MS } = {}) {
+// `at` backdates the run (tests only): production runs are stamped with the database clock
+async function runCollection(pool, { fetchLeaderboard = apewisdom.fetchLeaderboard, minIntervalMs = MIN_INTERVAL_MS, at = null } = {}) {
   const lock = await pool.connect();
   try {
     const { rows: [{ locked }] } = await lock.query('SELECT pg_try_advisory_lock($1) AS locked', [LOCK_KEY]);
@@ -41,17 +26,19 @@ async function runCollection(pool, { fetchLeaderboard = apewisdom.fetchLeaderboa
          AND started_at > now() - make_interval(secs => $2)`,
       [KIND, minIntervalMs / 1000]
     );
-    if (recent.length) return { status: 'skipped', reason: 'collected recently' };
+    if (recent.length && !at) return { status: 'skipped', reason: 'collected recently' };
 
     const { rows: [run] } = await pool.query(
-      `INSERT INTO collection_runs (kind, status) VALUES ($1, 'running') RETURNING id, started_at`,
-      [KIND]
+      `INSERT INTO collection_runs (kind, status, started_at) VALUES ($1, 'running', coalesce($2::timestamptz, now())) RETURNING id, started_at`,
+      [KIND, at]
     );
     try {
       const { rows: watch } = await pool.query('SELECT ticker FROM watchlist WHERE active');
       const leaderboard = await fetchLeaderboard();
-      const rows = selectRows(leaderboard, watch.map((w) => w.ticker));
-      const marketTotal = leaderboard.rows.reduce((sum, r) => sum + r.mentions, 0);
+      const rows = leaderboard.rows; // every ticker on the leaderboard is stored (compactly, see store.js)
+      const marketTotal = rows.reduce((sum, r) => sum + r.mentions, 0);
+      // Fingerprint of the numbers: when it differs from the previous run's, the source's data actually changed
+      const fp = crypto.createHash('md5').update(rows.map((r) => `${r.ticker}:${r.mentions}`).sort().join(',')).digest('hex');
 
       const client = await pool.connect();
       try {
@@ -62,17 +49,11 @@ async function runCollection(pool, { fetchLeaderboard = apewisdom.fetchLeaderboa
             [run.id, SOURCE, leaderboard.filter, page, run.started_at, JSON.stringify(payload)]
           );
         }
-        for (const r of rows) {
-          await client.query(
-            `INSERT INTO snapshots (run_id, source, ticker, fetched_at, ranked, rank, mentions, upvotes, rank_24h_ago, mentions_24h_ago)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-            [run.id, SOURCE, r.ticker, run.started_at, r.ranked, r.rank, r.mentions, r.upvotes, r.rank24hAgo, r.mentions24hAgo]
-          );
-        }
+        await storeRun(client, { startedAt: run.started_at, rows, marketTotal, watchlist: watch.map((w) => w.ticker) });
         await client.query(
           `UPDATE collection_runs SET status = 'success', finished_at = now(), pages_fetched = $2, pages_total = $3,
-             tickers_seen = $4, rows_written = $5, market_total_mentions = $6 WHERE id = $1`,
-          [run.id, leaderboard.rawPages.length, leaderboard.totalPages, leaderboard.rows.length, rows.length, marketTotal]
+             tickers_seen = $4, rows_written = $5, market_total_mentions = $6, details = $7 WHERE id = $1`,
+          [run.id, leaderboard.rawPages.length, leaderboard.totalPages, rows.length, rows.length, marketTotal, JSON.stringify({ fp })]
         );
         await client.query('COMMIT');
       } catch (err) {
@@ -85,7 +66,7 @@ async function runCollection(pool, { fetchLeaderboard = apewisdom.fetchLeaderboa
         `DELETE FROM raw_snapshots WHERE fetched_at < now() - make_interval(days => $1)`,
         [RAW_RETENTION_DAYS]
       );
-      return { status: 'success', runId: run.id, rows: rows.length, tickersSeen: leaderboard.rows.length, truncated: leaderboard.truncated };
+      return { status: 'success', runId: run.id, rows: rows.length, tickersSeen: rows.length, truncated: leaderboard.truncated };
     } catch (err) {
       await pool.query(
         `UPDATE collection_runs SET status = 'failed', finished_at = now(), error = $2 WHERE id = $1`,
@@ -99,24 +80,4 @@ async function runCollection(pool, { fetchLeaderboard = apewisdom.fetchLeaderboa
   }
 }
 
-// Runs once shortly after boot (catch-up after a deploy), then every ~30 minutes with jitter
-function startCollector(pool, { log = console } = {}) {
-  let timer;
-  let stopped = false;
-  const tick = async () => {
-    try {
-      const result = await runCollection(pool);
-      log.log(`RAVE collector: ${JSON.stringify(result)}`);
-    } catch (err) {
-      log.error('RAVE collector crashed:', err);
-    }
-    if (!stopped) timer = setTimeout(tick, INTERVAL_MS + Math.random() * JITTER_MS);
-  };
-  timer = setTimeout(tick, 5000);
-  return () => {
-    stopped = true;
-    clearTimeout(timer);
-  };
-}
-
-module.exports = { runCollection, startCollector, selectRows };
+module.exports = { runCollection };

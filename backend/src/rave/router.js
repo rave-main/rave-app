@@ -3,41 +3,32 @@ const { wrap } = require('../auth');
 const { loadSeries } = require('./series');
 const { scoreStock } = require('./scoring');
 const { auditRuns } = require('./audit');
+const { scoredStocks, dayOverDay } = require('./tracked');
+const { jobsStatus } = require('./scheduler');
+const { buildJobs } = require('./jobs');
 
-const STALE_AFTER_MIN = 90; // the collector runs about every 30 minutes
+const STALE_AFTER_MIN = 90; // the collector runs every 30 minutes
 const EXPECTED_INTERVAL_MIN = 30;
 // Railway's Postgres volume is 500 MB on the current plan; set DB_SIZE_LIMIT_MB if it is resized
 const DB_LIMIT_MB = Number(process.env.DB_SIZE_LIMIT_MB) || 500;
 
-// ApeWisdom's own comparison with 24 hours earlier; available from the very first snapshot
-function dayOverDay(r) {
-  if (r.mentions24hAgo === null || r.mentions24hAgo === undefined) return null;
-  return {
-    change: r.mentions - r.mentions24hAgo,
-    ratio: r.mentions24hAgo > 0 ? r.mentions / r.mentions24hAgo : null,
-  };
-}
-
-// One fingerprint per run over every stored (ticker, mentions) pair: when it differs from the previous
-// run's, ApeWisdom's data actually changed, as opposed to RAVE merely having checked.
+// Each successful run stores an md5 fingerprint of the leaderboard numbers (details.fp). When it differs from the
+// previous successful run's, the source's data actually changed, as opposed to RAVE merely having checked.
 const RUNS_WITH_CHANGE = `
-  WITH fp AS (
-    SELECT run_id, md5(string_agg(ticker || ':' || mentions, ',' ORDER BY ticker)) AS fp
-    FROM snapshots WHERE fetched_at > now() - interval '7 days' GROUP BY run_id
-  ), ok AS (
-    -- compare each successful run with the previous SUCCESSFUL run, so a failure in between does not hide a change
-    SELECT c.id, f.fp, lag(f.fp) OVER (ORDER BY c.started_at) AS prev_fp
-    FROM collection_runs c JOIN fp f ON f.run_id = c.id
-    WHERE c.kind = 'apewisdom' AND c.status = 'success' AND c.started_at > now() - interval '7 days'
+  WITH ok AS (
+    SELECT id, details->>'fp' AS fp, lag(details->>'fp') OVER (ORDER BY started_at) AS prev_fp
+    FROM collection_runs
+    WHERE kind = 'apewisdom' AND status = 'success' AND started_at > now() - interval '7 days'
   )
   SELECT c.id, c.status, c.started_at, c.finished_at, c.pages_fetched, c.pages_total, c.tickers_seen, c.rows_written,
          c.market_total_mentions, c.error,
-         CASE WHEN o.prev_fp IS NULL THEN NULL ELSE o.fp <> o.prev_fp END AS changed
+         CASE WHEN o.fp IS NULL OR o.prev_fp IS NULL THEN NULL ELSE o.fp <> o.prev_fp END AS changed
   FROM collection_runs c LEFT JOIN ok o ON o.id = c.id
   WHERE c.kind = 'apewisdom' AND c.started_at > now() - interval '7 days'`;
 
 function raveRouter(pool) {
   const router = express.Router();
+  const jobs = buildJobs();
 
   router.get('/watchlist', wrap(async (req, res) => {
     const { rows } = await pool.query(
@@ -46,25 +37,31 @@ function raveRouter(pool) {
     res.json(rows);
   }));
 
-  // Latest snapshot and RAVE scores (short / medium / long) for each active watchlist stock
+  // Every tracked stock (watchlist + anything that reached 5 mentions a day lately) with RAVE scores
   router.get('/stocks', wrap(async (req, res) => {
-    const { rows } = await pool.query(
-      `SELECT w.ticker, w.name, w.is_control AS "isControl",
-              s.fetched_at AS "fetchedAt", s.ranked, s.rank, s.mentions, s.upvotes,
-              s.rank_24h_ago AS "rank24hAgo", s.mentions_24h_ago AS "mentions24hAgo"
-       FROM watchlist w
-       LEFT JOIN LATERAL (
-         SELECT * FROM snapshots WHERE ticker = w.ticker ORDER BY fetched_at DESC LIMIT 1
-       ) s ON true
-       WHERE w.active ORDER BY w.is_control, w.ticker`
+    res.json(await scoredStocks(pool));
+  }));
+
+  // One stock: latest state, full score explanations and its history (hours = 1..2160, default 168).
+  // Works for ANY ticker that has been on the leaderboard, not only the tracked ones.
+  router.get('/stocks/:ticker', wrap(async (req, res) => {
+    const ticker = req.params.ticker.toUpperCase();
+    const hours = Math.min(Math.max(parseInt(req.query.hours, 10) || 168, 1), 2160);
+    const { rows: [stock] } = await pool.query(
+      `SELECT t.ticker, coalesce(w.name, t.name, t.ticker) AS name, w.ticker IS NOT NULL AS "isWatchlist", coalesce(w.is_control, false) AS "isControl",
+              t.rank_24h_ago AS "rank24hAgo", t.mentions_24h_ago AS "mentions24hAgo", t.mentions
+       FROM tickers t LEFT JOIN watchlist w ON w.ticker = t.ticker AND w.active WHERE t.ticker = $1`, [ticker]
     );
-    const series = await loadSeries(pool, rows.map((r) => r.ticker));
-    res.json(rows.map((r) => ({
-      ...r,
-      dayOverDay: dayOverDay(r),
-      spark: series.get(r.ticker).slice(-48).map((p) => p.mentions), // about the last 24 hours
-      scores: scoreStock(series.get(r.ticker), { ticker: r.ticker }),
-    })));
+    if (!stock) return res.status(404).json({ error: 'Ticker not found' });
+    const series = (await loadSeries(pool, [ticker])).get(ticker);
+    const since = Date.now() - hours * 3600 * 1000;
+    const latest = series[series.length - 1] || null;
+    res.json({
+      ticker: stock.ticker, name: stock.name, isWatchlist: stock.isWatchlist, isControl: stock.isControl,
+      latest: latest && { ...latest, dayOverDay: dayOverDay({ mentions: latest.mentions, mentions24hAgo: stock.mentions24hAgo }) },
+      scores: scoreStock(series, { ticker }),
+      history: series.filter((p) => p.t >= since).map((p) => ({ t: p.t, mentions: p.mentions, rank: p.rank, ranked: p.ranked, market: p.market })),
+    });
   }));
 
   // Re-verifies stored data against the raw responses (last `runs` successful runs, default 48 = about a day)
@@ -88,28 +85,14 @@ function raveRouter(pool) {
     res.json(rows);
   }));
 
-  // One stock: latest snapshot, full score explanations and its history (hours = 1..2160, default 168)
-  router.get('/stocks/:ticker', wrap(async (req, res) => {
-    const ticker = req.params.ticker.toUpperCase();
-    const hours = Math.min(Math.max(parseInt(req.query.hours, 10) || 168, 1), 2160);
-    const { rows: [stock] } = await pool.query(
-      'SELECT ticker, name, is_control AS "isControl", active FROM watchlist WHERE ticker = $1', [ticker]
-    );
-    if (!stock) return res.status(404).json({ error: 'Stock not on the watchlist' });
-    const series = (await loadSeries(pool, [ticker])).get(ticker);
-    const since = Date.now() - hours * 3600 * 1000;
-    const latest = series[series.length - 1] || null;
-    res.json({
-      ...stock,
-      latest: latest && { ...latest, dayOverDay: dayOverDay({ mentions: latest.mentions, mentions24hAgo: latest.mentions24hAgo }) },
-      scores: scoreStock(series, { ticker }),
-      history: series.filter((p) => p.t >= since).map((p) => ({ t: p.t, mentions: p.mentions, rank: p.rank, ranked: p.ranked, market: p.market })),
-    });
+  // Every scheduled source: cadence, last success, next scheduled run, staleness
+  router.get('/sources', wrap(async (req, res) => {
+    res.json(await jobsStatus(pool, jobs));
   }));
 
   // Source health: how fresh the data is, how much history exists, and how recent runs went
   router.get('/status', wrap(async (req, res) => {
-    const [{ rows: [lastSuccess] }, { rows: [lastRun] }, { rows: [counts] }, { rows: [history] }] = await Promise.all([
+    const [{ rows: [lastSuccess] }, { rows: [lastRun] }, { rows: [counts] }, { rows: [history] }, { rows: [{ bytes }] }, { rows: [change] }] = await Promise.all([
       pool.query(`SELECT id, started_at AS "startedAt", finished_at AS "finishedAt", pages_fetched AS "pagesFetched",
                          pages_total AS "pagesTotal", tickers_seen AS "tickersSeen", rows_written AS "rowsWritten",
                          market_total_mentions AS "marketTotalMentions"
@@ -119,16 +102,15 @@ function raveRouter(pool) {
       pool.query(`SELECT count(*) FILTER (WHERE status = 'success')::int AS success,
                          count(*) FILTER (WHERE status = 'failed')::int AS failed
                   FROM collection_runs WHERE kind = 'apewisdom' AND started_at > now() - interval '24 hours'`),
-      pool.query(`SELECT min(fetched_at) AS "firstSnapshotAt", count(DISTINCT fetched_at)::int AS snapshots FROM snapshots`),
+      pool.query(`SELECT min(md.day + (u.ord - 1) * interval '30 minutes') AS "firstSnapshotAt", count(*)::int AS snapshots
+                  FROM market_days md, unnest(md.market) WITH ORDINALITY AS u(m, ord) WHERE u.m IS NOT NULL`),
+      pool.query('SELECT pg_database_size(current_database())::float AS bytes'),
+      pool.query(`WITH runs AS (${RUNS_WITH_CHANGE})
+                  SELECT max(started_at) FILTER (WHERE changed) AS "lastChangeAt",
+                         count(*) FILTER (WHERE status = 'success' AND started_at > coalesce((SELECT max(started_at) FROM runs WHERE changed), '-infinity'))::int AS "unchangedRuns"
+                  FROM runs`),
     ]);
-    const { rows: [{ bytes }] } = await pool.query('SELECT pg_database_size(current_database())::float AS bytes');
     const sizeMB = Math.round(bytes / 1048576);
-    const { rows: [change] } = await pool.query(
-      `WITH runs AS (${RUNS_WITH_CHANGE})
-       SELECT max(started_at) FILTER (WHERE changed) AS "lastChangeAt",
-              count(*) FILTER (WHERE status = 'success' AND started_at > coalesce((SELECT max(started_at) FROM runs WHERE changed), '-infinity'))::int AS "unchangedRuns"
-       FROM runs`
-    );
     const ageMin = lastSuccess ? (Date.now() - new Date(lastSuccess.startedAt).getTime()) / 60000 : null;
     res.json({
       source: 'apewisdom',

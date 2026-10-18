@@ -1,7 +1,8 @@
 require('dotenv').config();
 const { createApp } = require('./src/app');
 const { createPool, migrate } = require('./src/db');
-const { startCollector } = require('./src/rave/collector');
+const { startScheduler } = require('./src/rave/scheduler');
+const { buildJobs } = require('./src/rave/jobs');
 
 const PORT = process.env.PORT || 3000;
 
@@ -14,10 +15,10 @@ async function main() {
     console.log(`Allowed origins: ${process.env.FRONTEND_ORIGIN || 'http://localhost:5173'}`);
   });
 
-  // RAVE_COLLECTOR=off disables the ApeWisdom collector (e.g. for a second local instance)
-  const stopCollector = process.env.RAVE_COLLECTOR === 'off' ? () => {} : startCollector(pool);
+  // RAVE_COLLECTOR=off disables all scheduled collection (e.g. for a second local instance)
+  const stopScheduler = process.env.RAVE_COLLECTOR === 'off' ? () => {} : startScheduler(pool, buildJobs());
   process.on('SIGTERM', () => {
-    stopCollector();
+    stopScheduler();
     server.close(() => process.exit(0));
   });
 }

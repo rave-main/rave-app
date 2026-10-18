@@ -1,8 +1,9 @@
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
-const { setup, signedInAgent } = require('./helpers');
+const { setup, signedInAgent, request, resetRave } = require('./helpers');
 const { runCollection } = require('../src/rave/collector');
 const { auditRuns } = require('../src/rave/audit');
+const { slotOf } = require('../src/rave/store');
 
 let pool, app;
 before(async () => ({ pool, app } = await setup()));
@@ -17,11 +18,20 @@ function leaderboard(bump = 0) {
   const payload = (slice) => ({ count: 150, pages: 2, results: slice.map((r) => ({ rank: r.rank, ticker: r.ticker, name: r.name, mentions: String(r.mentions), upvotes: r.upvotes })) });
   return { filter: 'all-stocks', totalPages: 2, truncated: false, rows, rawPages: [{ page: 1, payload: payload(rows.slice(0, 100)) }, { page: 2, payload: payload(rows.slice(100)) }] };
 }
+// n runs, 30 minutes apart, the newest about 10 minutes ago, each in its own half-hour slot
 const collect = async (n) => {
-  await pool.query('TRUNCATE collection_runs, raw_snapshots, snapshots RESTART IDENTITY CASCADE');
-  for (let i = 0; i < n; i++) assert.equal((await runCollection(pool, { fetchLeaderboard: async () => leaderboard(i), minIntervalMs: 0 })).status, 'success');
+  await resetRave(pool);
+  const newest = Date.now() - 10 * 60000;
+  for (let i = 0; i < n; i++) {
+    const at = new Date(Math.floor((newest - (n - 1 - i) * 30 * 60000) / (30 * 60000)) * 30 * 60000 + 2 * 60000);
+    assert.equal((await runCollection(pool, { fetchLeaderboard: async () => leaderboard(i), at })).status, 'success');
+  }
 };
 const failing = (audit) => audit.checks.filter((c) => !c.ok).map((c) => c.id);
+const slotOfRun = async (id) => {
+  const { rows: [r] } = await pool.query('SELECT started_at FROM collection_runs WHERE id = $1', [id]);
+  return slotOf(r.started_at);
+};
 
 test('a normal series of runs passes every check', async () => {
   await collect(3);
@@ -31,47 +41,63 @@ test('a normal series of runs passes every check', async () => {
   assert.deepEqual(failing(audit), []);
   assert.equal(audit.ok, true);
   assert.equal(audit.checks.length, 6);
+  assert.equal(audit.cadence.gapsOver45Min, 0);
   assert.equal(audit.note, null);
 });
 
 test('detects a stored value that differs from the raw response', async () => {
   await collect(2);
-  await pool.query(`UPDATE snapshots SET mentions = mentions + 1 WHERE ticker = 'GME' AND run_id = 1`);
+  const { day, slot } = await slotOfRun(1);
+  await pool.query(`UPDATE ticker_days SET mentions[$3] = mentions[$3] + 1 WHERE ticker = 'GME' AND day = $1 AND $2 = $2`, [day, slot, slot + 1]);
   const audit = await auditRuns(pool);
   assert.deepEqual(failing(audit), ['values-match']);
-  assert.match(audit.checks.find((c) => c.id === 'values-match').problems[0], /1 stored row\(s\) differ/);
+  assert.match(audit.checks.find((c) => c.id === 'values-match').problems[0], /1 stored value\(s\) differ/);
 });
 
-test('detects a missing row, a wrong total and a missing watchlist stock', async () => {
+test('detects a missing ticker, a wrong total, a missing watchlist stock and a phantom ticker', async () => {
   await collect(2);
-  await pool.query(`DELETE FROM snapshots WHERE ticker = 'T7' AND run_id = 1`);
-  await pool.query(`UPDATE collection_runs SET market_total_mentions = market_total_mentions + 5 WHERE id = 2`);
-  await pool.query(`DELETE FROM snapshots WHERE ticker = 'MSFT' AND run_id = 2`);
+  const a = await slotOfRun(1);
+  const b = await slotOfRun(2);
+  await pool.query(`DELETE FROM ticker_days WHERE ticker = 'T7' AND day = $1`, [a.day]); // a listed ticker lost
+  await pool.query(`UPDATE market_days SET market[$2] = market[$2] + 5 WHERE day = $1`, [b.day, b.slot + 1]); // total no longer matches
+  await pool.query(`UPDATE ticker_days SET mentions[$2] = NULL, ranks[$2] = NULL WHERE ticker = 'MSFT' AND day = $1`, [b.day, b.slot + 1]); // watchlist reading lost
   const audit = await auditRuns(pool);
-  assert.deepEqual(failing(audit).sort(), ['market-total', 'rows-saved', 'watchlist-complete']);
+  assert.deepEqual(failing(audit).sort(), ['market-total', 'rows-saved', 'values-match', 'watchlist-complete']);
+  await collect(1);
+  const c = await slotOfRun(1);
+  await pool.query(
+    `INSERT INTO ticker_days (ticker, day, mentions, ranks) VALUES ('PHANTOM', $1, array_fill(1, ARRAY[48]), array_fill(9::smallint, ARRAY[48]))`, [c.day]
+  );
+  assert.ok(failing(await auditRuns(pool)).includes('values-match'), 'a stored ranked row the raw data does not have');
 });
 
-test('detects raw data that is missing pages, and a stored row for a stock the raw data does not have', async () => {
+test('detects raw data that is missing pages', async () => {
   await collect(2);
   await pool.query(`DELETE FROM raw_snapshots WHERE run_id = 1 AND page = 2`);
-  await pool.query(`UPDATE snapshots SET ranked = false, rank = NULL, mentions = 0 WHERE ticker = 'GME' AND run_id = 2`);
   const audit = await auditRuns(pool);
   assert.ok(failing(audit).includes('raw-pages'));
   assert.ok(failing(audit).includes('raw-tickers'));
-  assert.ok(failing(audit).includes('values-match'), 'a row marked unranked although the raw data lists it');
 });
 
 test('reports gaps in collection and tolerates runs whose raw data has expired', async () => {
   await collect(3);
-  await pool.query(`UPDATE collection_runs SET started_at = now() - interval '4 hours 10 minutes' WHERE id = 1`);
-  await pool.query(`UPDATE collection_runs SET started_at = now() - interval '4 hours' WHERE id = 2`);
+  await pool.query(`UPDATE collection_runs SET started_at = started_at - interval '4 hours' WHERE id IN (1, 2)`);
   await pool.query(`DELETE FROM raw_snapshots WHERE run_id = 1`); // as if past retention
   const audit = await auditRuns(pool);
-  assert.equal(audit.runsWithRawData, 2);
+  assert.equal(audit.runsWithRawData, audit.runsChecked - 1);
   assert.match(audit.note, /1 older run/);
-  assert.equal(audit.cadence.gapsOver45Min, 1, 'the gap from 4 hours ago to now');
-  assert.ok(audit.cadence.longestGapMinutes >= 239);
-  assert.deepEqual(failing(audit), [], 'expired raw data is not an error');
+  assert.equal(audit.cadence.gapsOver45Min, 1, 'the gap between the older pair and the newest run');
+  assert.ok(audit.cadence.longestGapMinutes >= 200);
+});
+
+test('a run overwritten by a later run in the same half hour is superseded, not reported as an error', async () => {
+  await resetRave(pool);
+  const slotStart = Math.floor((Date.now() - 3 * 3600000) / (30 * 60000)) * 30 * 60000;
+  await runCollection(pool, { fetchLeaderboard: async () => leaderboard(0), at: new Date(slotStart + 60000) });
+  await runCollection(pool, { fetchLeaderboard: async () => leaderboard(9), at: new Date(slotStart + 600000) }); // same slot, different numbers
+  const audit = await auditRuns(pool);
+  assert.equal(audit.runsChecked, 1, 'only the run whose values are stored is checked');
+  assert.equal(audit.ok, true);
 });
 
 test('integrity endpoint requires sign-in and returns the audit', async () => {
@@ -80,5 +106,16 @@ test('integrity endpoint requires sign-in and returns the audit', async () => {
   const res = await agent.get('/api/rave/integrity?runs=10').expect(200);
   assert.equal(res.body.ok, true);
   assert.equal(res.body.runsChecked, 2);
-  await require('supertest')(app).get('/api/rave/integrity').expect(401);
+  await request(app).get('/api/rave/integrity').expect(401);
+});
+
+test('runs from before the storage migration are skipped with an explanation, but still count for cadence', async () => {
+  await collect(2);
+  await pool.query(`INSERT INTO collection_runs (kind, status, started_at, tickers_seen, rows_written, market_total_mentions, details)
+                    VALUES ('apewisdom', 'success', now() - interval '5 hours', 800, 103, 4000, '{"legacy": true}')`);
+  const audit = await auditRuns(pool);
+  assert.equal(audit.runsChecked, 2, 'the legacy run is not checked');
+  assert.equal(audit.ok, true);
+  assert.match(audit.note, /1 early run\(s\) were stored in the earlier layout/);
+  assert.equal(audit.cadence.gapsOver45Min, 1, 'but its absence from the cadence is visible');
 });

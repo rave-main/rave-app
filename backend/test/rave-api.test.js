@@ -1,22 +1,23 @@
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
-const { setup, signedInAgent, request } = require('./helpers');
+const { setup, signedInAgent, request, resetRave, seedHistory } = require('./helpers');
+const { simulate, simulateCounts, HOUR } = require('./rave-sim');
 
 let pool, app;
 before(async () => ({ pool, app } = await setup()));
 after(() => pool.end());
 
-const insertRun = async (status, ago = '0 minutes', extra = {}) =>
+const insertRun = async (status, ago = '0 minutes', { error = null, fp = null } = {}) =>
   (await pool.query(
-    `INSERT INTO collection_runs (kind, status, started_at, finished_at, pages_fetched, pages_total, tickers_seen, rows_written, market_total_mentions, error)
-     VALUES ('apewisdom', $1, now() - $2::interval, now() - $2::interval, 2, 2, 150, 102, 5000, $3) RETURNING *`,
-    [status, ago, extra.error ?? null]
+    `INSERT INTO collection_runs (kind, status, started_at, finished_at, pages_fetched, pages_total, tickers_seen, rows_written, market_total_mentions, error, details)
+     VALUES ('apewisdom', $1, now() - $2::interval, now() - $2::interval + interval '8 seconds', 9, 9, 800, 800, 5000, $3, $4) RETURNING *`,
+    [status, ago, error, fp ? JSON.stringify({ fp }) : null]
   )).rows[0];
 
 test('RAVE endpoints require sign-in', async () => {
-  await request(app).get('/api/rave/status').expect(401);
-  await request(app).get('/api/rave/stocks').expect(401);
-  await request(app).get('/api/rave/watchlist').expect(401);
+  for (const path of ['status', 'stocks', 'stocks/GME', 'watchlist', 'runs', 'sources', 'integrity']) {
+    await request(app).get(`/api/rave/${path}`).expect(401);
+  }
 });
 
 test('watchlist is seeded with the starting stocks and two controls', async () => {
@@ -24,24 +25,23 @@ test('watchlist is seeded with the starting stocks and two controls', async () =
   const { body } = await agent.get('/api/rave/watchlist').expect(200);
   assert.equal(body.length, 10);
   assert.deepEqual(body.filter((w) => w.isControl).map((w) => w.ticker), ['AAPL', 'MSFT']);
-  assert.ok(body.some((w) => w.ticker === 'GME' && w.name === 'GameStop'));
 });
 
-test('status reports stale with no data, then fresh after a recent run, then stale again when old', async () => {
-  await pool.query('TRUNCATE collection_runs, snapshots RESTART IDENTITY CASCADE');
+test('status reports stale with no data, fresh after a recent run, stale again when old, and the database size', async () => {
+  await resetRave(pool);
   const { agent } = await signedInAgent(app);
-
   let { body } = await agent.get('/api/rave/status').expect(200);
   assert.equal(body.stale, true);
   assert.equal(body.lastSuccess, null);
+  assert.equal(body.expectedIntervalMinutes, 30);
+  assert.ok(body.database.sizeMB > 0 && body.database.limitMB === 500 && body.database.usedPercent >= 0);
 
   await insertRun('success', '10 minutes');
   ({ body } = await agent.get('/api/rave/status').expect(200));
   assert.equal(body.stale, false);
-  assert.equal(body.lastSuccess.rowsWritten, 102);
   assert.equal(body.last24h.success, 1);
 
-  await pool.query('TRUNCATE collection_runs RESTART IDENTITY CASCADE');
+  await resetRave(pool);
   await insertRun('success', '3 hours');
   await insertRun('failed', '5 minutes', { error: 'upstream down' });
   ({ body } = await agent.get('/api/rave/status').expect(200));
@@ -51,139 +51,79 @@ test('status reports stale with no data, then fresh after a recent run, then sta
   assert.equal(body.last24h.failed, 1);
 });
 
-test('stocks returns the latest snapshot per watchlist stock, and nulls where none exists yet', async () => {
-  await pool.query('TRUNCATE collection_runs, snapshots RESTART IDENTITY CASCADE');
+test('status and runs tell "checked" apart from "data actually changed" (using each run\'s fingerprint)', async () => {
+  await resetRave(pool);
   const { agent } = await signedInAgent(app);
-  const run = await insertRun('success');
-  const add = (ticker, at, mentions, ranked = true) =>
-    pool.query(
-      `INSERT INTO snapshots (run_id, ticker, fetched_at, ranked, rank, mentions) VALUES ($1, $2, now() - $3::interval, $4, $5, $6)`,
-      [run.id, ticker, at, ranked, ranked ? 3 : null, mentions]
-    );
-  await add('GME', '2 hours', 10);
-  await add('GME', '10 minutes', 99);
-  await add('AMC', '10 minutes', 0, false);
-
-  const { body } = await agent.get('/api/rave/stocks').expect(200);
-  const byTicker = Object.fromEntries(body.map((s) => [s.ticker, s]));
-  assert.equal(body.length, 10);
-  assert.equal(byTicker.GME.mentions, 99, 'uses the newest snapshot');
-  assert.equal(byTicker.AMC.ranked, false);
-  assert.equal(byTicker.TSLA.mentions, null, 'no snapshot yet');
-});
-
-test('stocks include scores computed from stored history, and "No data" for stocks without any', async () => {
-  const { simulate, HOUR } = require('./rave-sim');
-  await pool.query('TRUNCATE collection_runs, snapshots RESTART IDENTITY CASCADE');
-  const { agent } = await signedInAgent(app);
-
-  // 40 days of GME history, shifted so the newest point is "now"; a 5x surge over the final 36 hours
-  const base = simulate({ days: 40, seed: 21, multiplier: () => 1 });
-  const surge = simulate({ days: 40, seed: 21, multiplier: (t) => (t > base[base.length - 1].t - 36 * HOUR ? 5 : 1) });
-  const shift = Date.now() - surge[surge.length - 1].t;
-  const times = surge.map((p) => new Date(p.t + shift));
-  const { rows: runs } = await pool.query(
-    `INSERT INTO collection_runs (kind, status, started_at, market_total_mentions)
-     SELECT 'apewisdom', 'success', t, m FROM unnest($1::timestamptz[], $2::int[]) AS x(t, m) RETURNING id`,
-    [times, surge.map((p) => p.market)]
-  );
-  await pool.query(
-    `INSERT INTO snapshots (run_id, ticker, fetched_at, ranked, rank, mentions)
-     SELECT run_id, 'GME', t, true, 3, m FROM unnest($1::int[], $2::timestamptz[], $3::int[]) AS x(run_id, t, m)`,
-    [runs.map((r) => r.id), times, surge.map((p) => p.mentions)]
-  );
-
-  const { body } = await agent.get('/api/rave/stocks').expect(200);
-  const byTicker = Object.fromEntries(body.map((s) => [s.ticker, s]));
-  assert.equal(byTicker.GME.scores.version, 'v1');
-  assert.equal(byTicker.GME.scores.short.status, 'ok');
-  assert.ok(['Hot', 'Extreme'].includes(byTicker.GME.scores.short.label), byTicker.GME.scores.short.label);
-  assert.match(byTicker.GME.scores.short.explanation, /^GME: /);
-  assert.equal(byTicker.GME.scores.medium.status, 'ok');
-  assert.equal(byTicker.TSLA.scores.summary.label, 'No data');
-});
-
-// Inserts a successful run `minutesAgo` minutes ago with the given mentions per ticker
-async function addRun(minutesAgo, mentions, { market = 1000, status = 'success' } = {}) {
-  const { rows: [run] } = await pool.query(
-    `INSERT INTO collection_runs (kind, status, started_at, finished_at, pages_fetched, pages_total, tickers_seen, rows_written, market_total_mentions)
-     VALUES ('apewisdom', $1, now() - make_interval(mins => $2), now() - make_interval(mins => $2) + interval '8 seconds', 9, 9, 800, 103, $3)
-     RETURNING id`,
-    [status, minutesAgo, market]
-  );
-  if (status === 'success') {
-    for (const [ticker, m] of Object.entries(mentions)) {
-      await pool.query(
-        `INSERT INTO snapshots (run_id, ticker, fetched_at, ranked, rank, mentions, mentions_24h_ago)
-         VALUES ($1, $2, now() - make_interval(mins => $3), true, 5, $4, 10)`,
-        [run.id, ticker, minutesAgo, m]
-      );
-    }
-  }
-  return run;
-}
-
-test('status and runs tell "checked" apart from "data actually changed"', async () => {
-  await pool.query('TRUNCATE collection_runs, snapshots RESTART IDENTITY CASCADE');
-  const { agent } = await signedInAgent(app);
-
-  await addRun(150, { GME: 5, AMC: 2 });
-  await addRun(120, { GME: 5, AMC: 2 }); // identical to the run before
-  await addRun(90, { GME: 5, AMC: 2 }); // identical again
+  await insertRun('success', '150 minutes', { fp: 'aaa' });
+  await insertRun('success', '120 minutes', { fp: 'aaa' });
+  await insertRun('success', '90 minutes', { fp: 'aaa' });
   let { body } = await agent.get('/api/rave/status').expect(200);
   assert.equal(body.lastChangeAt, null, 'no change has been seen yet');
   assert.equal(body.unchangedRuns, 3);
-  assert.equal(body.expectedIntervalMinutes, 30);
-  assert.ok(body.database.sizeMB > 0 && body.database.limitMB === 500 && body.database.usedPercent >= 0, 'reports database size against the volume limit');
 
-  await addRun(60, { GME: 9, AMC: 2 }); // GME moved
-  await addRun(30, { GME: 9, AMC: 2 });
+  await insertRun('failed', '75 minutes', { error: 'blip' });
+  await insertRun('success', '60 minutes', { fp: 'bbb' }); // the numbers moved (a failed run in between must not hide it)
+  await insertRun('success', '30 minutes', { fp: 'bbb' });
   ({ body } = await agent.get('/api/rave/status').expect(200));
-  assert.ok(body.lastChangeAt, 'a change is now on record');
   assert.ok(Math.abs((Date.now() - new Date(body.lastChangeAt).getTime()) / 60000 - 60) < 2, 'the change was 60 minutes ago');
-  assert.equal(body.unchangedRuns, 1, 'one successful run since the change');
+  assert.equal(body.unchangedRuns, 1);
 
   const { body: runs } = await agent.get('/api/rave/runs?limit=10').expect(200);
-  assert.equal(runs.length, 5);
-  assert.deepEqual(runs.map((r) => r.changed), [false, true, false, false, null], 'newest first; the oldest has nothing to compare with');
+  assert.equal(runs.length, 6);
+  assert.deepEqual(runs.map((r) => r.changed), [false, true, null, false, false, null], 'newest first; failed and first runs have nothing to compare');
   assert.equal(Math.round(runs[0].durationSec), 8);
-  assert.equal(runs[0].tickersSeen, 800);
 });
 
-test('runs lists failures and never marks them as a data change', async () => {
-  await pool.query('TRUNCATE collection_runs, snapshots RESTART IDENTITY CASCADE');
+test('stocks: every watchlist stock plus any ticker that reached 5 mentions lately, with scores, a sparkline and day-over-day', async () => {
+  await resetRave(pool);
   const { agent } = await signedInAgent(app);
-  await addRun(90, { GME: 5 });
-  await addRun(60, {}, { status: 'failed' });
-  await addRun(30, { GME: 6 });
-  const { body: runs } = await agent.get('/api/rave/runs').expect(200);
-  assert.deepEqual(runs.map((r) => [r.status, r.changed]), [['success', true], ['failed', null], ['success', null]]);
-});
+  const grid = simulate({ days: 40, seed: 21 }); // 40 days, one point per 30 minutes
+  const surge = simulate({ days: 40, seed: 21, multiplier: (t) => (t > grid[grid.length - 1].t - 36 * HOUR ? 5 : 1) });
+  const flat = (level) => grid.map((p) => ({ ...p, mentions: level }));
+  await seedHistory(pool, { GME: surge, HOT1: flat(30), QUIET1: flat(2) });
 
-test('stocks include a sparkline and the day-over-day comparison', async () => {
-  await pool.query('TRUNCATE collection_runs, snapshots RESTART IDENTITY CASCADE');
-  const { agent } = await signedInAgent(app);
-  for (let i = 5; i >= 1; i--) await addRun(i * 30, { GME: 10 + (5 - i) });
   const { body } = await agent.get('/api/rave/stocks').expect(200);
-  const gme = body.find((s) => s.ticker === 'GME');
-  assert.deepEqual(gme.spark, [10, 11, 12, 13, 14]);
-  assert.equal(gme.dayOverDay.change, 4); // 14 now vs the 10 stored as "24h ago"
-  assert.equal(body.find((s) => s.ticker === 'TSLA').dayOverDay, null);
-  assert.deepEqual(body.find((s) => s.ticker === 'TSLA').spark, []);
+  const by = Object.fromEntries(body.map((s) => [s.ticker, s]));
+  assert.ok(by.GME && by.TSLA, 'watchlist stocks are always included');
+  assert.ok(by.HOT1, 'a non-watchlist ticker at 30 mentions a day is tracked');
+  assert.equal(by.QUIET1, undefined, 'a ticker that never reaches 5 mentions is stored but not tracked');
+  assert.equal(by.HOT1.isWatchlist, false);
+  assert.equal(by.GME.isWatchlist, true);
+  assert.equal(body.length, 11);
+
+  assert.equal(by.GME.scores.version, 'v1');
+  assert.equal(by.GME.scores.short.status, 'ok');
+  assert.ok(['Hot', 'Extreme'].includes(by.GME.scores.short.label), by.GME.scores.short.label);
+  assert.match(by.GME.scores.short.explanation, /^GME: /);
+  assert.equal(by.GME.scores.medium.status, 'ok');
+  assert.equal(by.TSLA.scores.summary.label, 'Low volume', 'a watchlist stock that was never on the leaderboard has 0 mentions: too few to rate');
+  assert.equal(by.HOT1.spark.length, 48);
+  assert.equal(by.HOT1.dayOverDay.change, 3, 'latest 30 vs the stored 24h-ago value of 27');
+  assert.deepEqual(by.TSLA.spark, Array(48).fill(0));
 });
 
-test('single-stock endpoint returns history, scores and 404s for unknown tickers', async () => {
-  await pool.query('TRUNCATE collection_runs, snapshots RESTART IDENTITY CASCADE');
+test('single-stock endpoint works for any ticker that has been on the leaderboard, with history, and 404s otherwise', async () => {
+  await resetRave(pool);
   const { agent } = await signedInAgent(app);
-  for (let i = 4; i >= 1; i--) await addRun(i * 45, { GME: 10 * i }); // 45, 90, 135 and 180 minutes ago
-  const { body } = await agent.get('/api/rave/stocks/gme?hours=2').expect(200);
-  assert.equal(body.ticker, 'GME');
-  assert.equal(body.name, 'GameStop');
-  assert.equal(body.history.length, 2, 'hours=2 keeps the 45- and 90-minute-old points only');
-  assert.equal(body.latest.mentions, 10);
-  assert.equal(body.scores.short.status, 'warming_up');
-  const all = (await agent.get('/api/rave/stocks/GME').expect(200)).body;
-  assert.equal(all.history.length, 4);
+  const grid = simulateCounts({ days: 3, level: 20, seed: 4 });
+  await seedHistory(pool, { ZZZ: grid });
+  const day = await agent.get('/api/rave/stocks/zzz?hours=24').expect(200);
+  assert.equal(day.body.ticker, 'ZZZ');
+  assert.equal(day.body.isWatchlist, false);
+  assert.ok(day.body.history.length >= 47 && day.body.history.length <= 49, `${day.body.history.length} points in 24h`);
+  assert.equal(day.body.latest.mentions, grid[grid.length - 1].mentions);
+  assert.equal(day.body.scores.short.status, 'warming_up');
+  const gme = await agent.get('/api/rave/stocks/GME').expect(200);
+  assert.equal(gme.body.name, 'GameStop');
+  assert.equal(gme.body.isWatchlist, true);
   await agent.get('/api/rave/stocks/NOPE').expect(404);
-  await request(app).get('/api/rave/runs').expect(401);
+});
+
+test('status history comes from the day arrays', async () => {
+  await resetRave(pool);
+  const { agent } = await signedInAgent(app);
+  await seedHistory(pool, { ZZZ: simulateCounts({ days: 3, level: 10, seed: 5 }) });
+  const { body } = await agent.get('/api/rave/status').expect(200);
+  assert.ok(body.history.snapshots > 90, `${body.history.snapshots} readings`);
+  assert.ok(new Date(body.history.firstSnapshotAt).getTime() < Date.now() - 24 * 3600000);
 });

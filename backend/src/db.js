@@ -79,6 +79,84 @@ const migrations = [
      UNIQUE (source, ticker, fetched_at)
    );
    CREATE INDEX snapshots_ticker_time_idx ON snapshots(ticker, fetched_at DESC);`,
+
+  // Compact storage for every ticker (see src/rave/store.js), replacing the row-per-reading `snapshots` table.
+  // Existing data is converted: readings go to the slot of the half hour they were taken in.
+  `CREATE TABLE tickers (
+     ticker TEXT PRIMARY KEY,
+     name TEXT,
+     first_seen TIMESTAMPTZ NOT NULL,
+     last_seen TIMESTAMPTZ NOT NULL,
+     fetched_at TIMESTAMPTZ NOT NULL,
+     ranked BOOLEAN NOT NULL,
+     rank INTEGER,
+     mentions INTEGER NOT NULL,
+     upvotes INTEGER,
+     rank_24h_ago INTEGER,
+     mentions_24h_ago INTEGER
+   ) WITH (fillfactor = 70);
+   CREATE TABLE market_days (
+     day DATE PRIMARY KEY,
+     market INTEGER[] NOT NULL,
+     tickers SMALLINT[] NOT NULL
+   );
+   CREATE TABLE ticker_days (
+     ticker TEXT NOT NULL,
+     day DATE NOT NULL,
+     mentions INTEGER[] NOT NULL,
+     ranks SMALLINT[] NOT NULL,
+     PRIMARY KEY (ticker, day)
+   ) WITH (fillfactor = 70); -- rows are updated in place up to 48 times a day; spare page space keeps those updates cheap
+   CREATE INDEX ticker_days_day_idx ON ticker_days(day);
+   ALTER TABLE collection_runs ADD COLUMN details JSONB;
+   -- runs collected before this migration stored only the watchlist + top 100 in the old layout
+   UPDATE collection_runs SET details = '{"legacy": true}'::jsonb WHERE kind = 'apewisdom';
+
+   INSERT INTO market_days (day, market, tickers)
+   SELECT d.day, array_agg(r.market ORDER BY s.slot), array_agg(r.tk::smallint ORDER BY s.slot)
+   FROM (SELECT DISTINCT (started_at AT TIME ZONE 'UTC')::date AS day FROM collection_runs WHERE kind = 'apewisdom' AND status = 'success') d
+   CROSS JOIN generate_series(0, 47) AS s(slot)
+   LEFT JOIN LATERAL (
+     SELECT c.market_total_mentions AS market, c.tickers_seen AS tk FROM collection_runs c
+     WHERE c.kind = 'apewisdom' AND c.status = 'success' AND (c.started_at AT TIME ZONE 'UTC')::date = d.day
+       AND floor((extract(hour FROM c.started_at AT TIME ZONE 'UTC') * 60 + extract(minute FROM c.started_at AT TIME ZONE 'UTC')) / 30) = s.slot
+     ORDER BY c.started_at DESC LIMIT 1
+   ) r ON true
+   GROUP BY d.day;
+
+   INSERT INTO ticker_days (ticker, day, mentions, ranks)
+   SELECT x.ticker, x.day,
+          (SELECT array_agg(CASE WHEN md.market[s.slot + 1] IS NULL THEN NULL ELSE coalesce(v.mentions, 0) END ORDER BY s.slot)
+             FROM generate_series(0, 47) AS s(slot)
+             LEFT JOIN LATERAL (
+               SELECT sn.mentions FROM snapshots sn
+               WHERE sn.ticker = x.ticker AND (sn.fetched_at AT TIME ZONE 'UTC')::date = x.day
+                 AND floor((extract(hour FROM sn.fetched_at AT TIME ZONE 'UTC') * 60 + extract(minute FROM sn.fetched_at AT TIME ZONE 'UTC')) / 30) = s.slot
+               ORDER BY sn.fetched_at DESC LIMIT 1) v ON true),
+          (SELECT array_agg(v.rank::smallint ORDER BY s.slot)
+             FROM generate_series(0, 47) AS s(slot)
+             LEFT JOIN LATERAL (
+               SELECT sn.rank FROM snapshots sn
+               WHERE sn.ticker = x.ticker AND (sn.fetched_at AT TIME ZONE 'UTC')::date = x.day
+                 AND floor((extract(hour FROM sn.fetched_at AT TIME ZONE 'UTC') * 60 + extract(minute FROM sn.fetched_at AT TIME ZONE 'UTC')) / 30) = s.slot
+               ORDER BY sn.fetched_at DESC LIMIT 1) v ON true)
+   FROM (SELECT DISTINCT ticker, (fetched_at AT TIME ZONE 'UTC')::date AS day FROM snapshots) x
+   JOIN market_days md ON md.day = x.day;
+
+   -- latest state of EVERY ticker, taken from the newest run's raw responses (names are only there)
+   INSERT INTO tickers (ticker, name, first_seen, last_seen, fetched_at, ranked, rank, mentions, upvotes, rank_24h_ago, mentions_24h_ago)
+   SELECT upper(trim(e->>'ticker')), e->>'name', c.started_at, c.started_at, c.started_at, true,
+          (e->>'rank')::int, (e->>'mentions')::int, nullif(e->>'upvotes', '')::int,
+          nullif(e->>'rank_24h_ago', '')::int, nullif(e->>'mentions_24h_ago', '')::int
+   FROM collection_runs c JOIN raw_snapshots rs ON rs.run_id = c.id, jsonb_array_elements(rs.payload->'results') e
+   WHERE c.id = (SELECT id FROM collection_runs WHERE kind = 'apewisdom' AND status = 'success'
+                  AND EXISTS (SELECT 1 FROM raw_snapshots r2 WHERE r2.run_id = collection_runs.id)
+                 ORDER BY started_at DESC LIMIT 1)
+   ON CONFLICT DO NOTHING;
+   INSERT INTO tickers (ticker, name, first_seen, last_seen, fetched_at, ranked, mentions)
+   SELECT w.ticker, w.name, now(), now(), now(), false, 0 FROM watchlist w ON CONFLICT DO NOTHING;
+
+   DROP TABLE snapshots;`,
 ];
 
 function createPool(connectionString = process.env.DATABASE_URL) {
