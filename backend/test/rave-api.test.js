@@ -134,6 +134,7 @@ test('status and runs tell "checked" apart from "data actually changed"', async 
   assert.equal(body.lastChangeAt, null, 'no change has been seen yet');
   assert.equal(body.unchangedRuns, 3);
   assert.equal(body.expectedIntervalMinutes, 30);
+  assert.ok(body.database.sizeMB > 0 && body.database.limitMB === 500 && body.database.usedPercent >= 0, 'reports database size against the volume limit');
 
   await addRun(60, { GME: 9, AMC: 2 }); // GME moved
   await addRun(30, { GME: 9, AMC: 2 });

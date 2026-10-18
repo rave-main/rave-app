@@ -41,4 +41,47 @@ function simulate({ days, level = 100, others = 4000, seed = 1, dayNoise = 0.25,
   return series;
 }
 
-module.exports = { simulate, rng, START, DAY, HOUR };
+// Poisson sampler: exact for small means (Knuth), normal approximation for large ones
+function poisson(r, lambda) {
+  if (lambda <= 0) return 0;
+  if (lambda >= 30) return Math.max(0, Math.round(lambda + Math.sqrt(lambda) * gauss(r)));
+  const limit = Math.exp(-lambda);
+  let k = 0;
+  let p = 1;
+  do {
+    k++;
+    p *= r();
+  } while (p > limit);
+  return k - 1;
+}
+
+// Realistic LOW-VOLUME data. ApeWisdom's raw data is mention counts per 10 minutes; the API reports their rolling
+// 24-hour sum (verified against the live site), sampled here every 30 minutes. `level` is mentions per day.
+// Day-to-day interest varies persistently (dayNoise) on top of the Poisson noise, and weekends are quieter.
+function simulateCounts({ days, level = 20, others = 1500, seed = 1, dayNoise = 0.3, multiplier = () => 1, marketMultiplier = () => 1 }) {
+  const r = rng(seed);
+  const noise = Array.from({ length: days + 2 }, () => Math.exp(dayNoise * gauss(r)));
+  const bucket = (t, base, mult) => {
+    const d = Math.floor((t - START) / DAY);
+    const weekday = (new Date(t).getUTCDay() + 6) % 7;
+    return poisson(r, (base / 144) * (weekday >= 5 ? 0.7 : 1) * noise[d] * mult(t));
+  };
+  const stock = [];
+  const rest = [];
+  const rolling = [];
+  const series = [];
+  for (let i = 0; i < days * 144; i++) {
+    const t = START + i * (HOUR / 6);
+    stock.push(bucket(t, level, multiplier));
+    rest.push(bucket(t, others, marketMultiplier));
+    if (i >= 143 && (i - 143) % 3 === 0) {
+      const sum = (arr) => arr.slice(i - 143, i + 1).reduce((a, b) => a + b, 0);
+      const mentions = sum(stock);
+      rolling.push(mentions);
+      series.push({ t, mentions, market: mentions + sum(rest), ranked: mentions > 0, rank: mentions > 0 ? 10 : null, rank24hAgo: null, mentions24hAgo: rolling[rolling.length - 49] ?? null });
+    }
+  }
+  return series;
+}
+
+module.exports = { simulate, simulateCounts, poisson, rng, START, DAY, HOUR };

@@ -1,8 +1,8 @@
 // RAVE scoring: how unusual is a stock's Reddit attention right now, over short / medium / long horizons?
 //
 // ApeWisdom `mentions` is a rolling 24-hour count, so every point already covers a full day (no hour-of-day
-// effect). A stock is compared with ITS OWN history. Two views are computed: raw mentions, and the stock's
-// share of all leaderboard chatter, which removes market-wide waves. Labels use the share view when available.
+// effect). A stock is compared with ITS OWN history. Two views are computed: raw mentions, and mentions adjusted to
+// a typical-sized market day, which removes market-wide waves. Labels use the adjusted view when available.
 // All thresholds live in CONFIG so a change is a new version, and backtests can use exactly what runs live.
 const { median, scaledMad } = require('./stats');
 
@@ -13,6 +13,8 @@ const CONFIG = {
   version: 'v1',
   minLevel: 10, // mentions per 24h below which a stock is never flagged (tiny counts are noise)
   minScale: 0.05, // floor for the spread in log space (5%) so a flat history cannot make z explode
+  lowVolume: 5, // a stock that typically gets fewer mentions a day than this cannot be rated reliably
+  spreadDays: 28, // days of same-time-of-day observations used to estimate day-to-day variation
   thresholds: [
     { label: 'Extreme', ratio: 3, z: 4 },
     { label: 'Hot', ratio: 2, z: 3 },
@@ -23,14 +25,14 @@ const CONFIG = {
   long: { currentDays: 28, minCurrent: 20, baselineFromDay: 28, baselineDays: 730, minBaseline: 28, toleranceMs: 3 * HOUR },
 };
 
-const rank = (label) => ['Quiet', 'Rising', 'Hot', 'Extreme'].indexOf(label);
+const rank = (label) => ['Quiet', 'Rising', 'Hot', 'Extreme'].indexOf(label); // 'Low volume' ranks like unrated (-1)
 const fmt = (n) => (n >= 100 ? Math.round(n).toLocaleString('en-US') : String(Math.round(n * 10) / 10));
 const x = (ratio) => `${fmt(ratio)}×`;
 
 // series: points sorted by time: { t, mentions, market, ranked, rank, rank24hAgo, mentions24hAgo }
 // `market` is the total mentions across the leaderboard at that time (null if unknown).
 function prepare(series) {
-  return series.map((p) => ({ ...p, share: p.market > 0 ? (1000 * p.mentions) / p.market : null }));
+  return series;
 }
 
 // Nearest point to `target` within `tol`, by binary search (series is sorted)
@@ -60,40 +62,53 @@ function dailyPoints(series, now, fromDay, toDay, tol) {
   return out;
 }
 
-// Compare a current value with baseline values: ratio to the baseline median, and a robust z-score on the log scale
-function compare(current, baseline, { floor }) {
+// Compare a current value with baseline values: ratio to the baseline median, and a robust z-score on the log scale.
+//  - the centre is the median of `baseline`;
+//  - the spread comes from `spread` (one value per day, so independent observations), not from `baseline`, whose
+//    points overlap heavily; it is floored by the Poisson noise inherent to small counts (about 1/sqrt(count));
+//  - z is divided by sqrt(1 + 1.57/nDays) because the centre itself is only estimated from nDays independent days.
+function compare(current, baseline, { floor, spread, countBase, nDays }) {
   const base = median(baseline);
   const logs = baseline.map((v) => Math.log1p(v));
-  const scale = Math.max(scaledMad(logs), CONFIG.minScale);
+  const spreadLogs = (spread && spread.length >= 3 ? spread : baseline).map((v) => Math.log1p(v));
+  const scale = Math.max(scaledMad(spreadLogs), CONFIG.minScale, 1 / Math.sqrt(Math.max(countBase, 0) + 1));
+  const inflate = Math.sqrt(1 + 1.57 / Math.max(nDays, 1));
   return {
     current,
     baselineMedian: base,
     ratio: current / Math.max(base, floor),
-    z: (Math.log1p(current) - median(logs)) / scale,
+    z: (Math.log1p(current) - median(logs)) / (scale * inflate),
     n: baseline.length,
   };
 }
 
-function viewOf(currentPoints, baselinePoints) {
-  const medianOf = (pts, f) => median(pts.map((p) => p[f]));
-  const have = (pts, f) => pts.length && pts.every((p) => p[f] !== null && p[f] !== undefined);
-  const raw = compare(medianOf(currentPoints, 'mentions'), baselinePoints.map((p) => p.mentions), { floor: 1 });
-  const shareOk = have(currentPoints, 'share') && have(baselinePoints, 'share');
-  const adjusted = shareOk
-    ? compare(medianOf(currentPoints, 'share'), baselinePoints.map((p) => p.share), { floor: 0.01 })
-    : null;
-  const marketOk = have(currentPoints, 'market') && have(baselinePoints, 'market');
-  const market = marketOk
-    ? compare(medianOf(currentPoints, 'market'), baselinePoints.map((p) => p.market), { floor: 1 })
-    : null;
+function viewOf(currentPoints, baselinePoints, { spreadPoints = null, nDays } = {}) {
+  const med = (arr) => median(arr);
+  const countBase = med(baselinePoints.map((p) => p.mentions));
+  const run = (get, floor, extra = {}) =>
+    compare(med(currentPoints.map(get)), baselinePoints.map(get), { floor, spread: spreadPoints && spreadPoints.map(get), countBase, nDays, ...extra });
+  const raw = run((p) => p.mentions, 1);
+
+  // Market adjustment: restate each point's mentions as what it would be on a typical-sized market day (the
+  // baseline's median leaderboard total), so a market-wide wave cancels out. The result stays in "mentions",
+  // which is what the log scale and the Poisson floor expect.
+  const known = (pts) => pts.length > 0 && pts.every((p) => p.market > 0);
+  let adjusted = null;
+  let market = null;
+  if (known(currentPoints) && known(baselinePoints) && (!spreadPoints || known(spreadPoints))) {
+    const typical = med(baselinePoints.map((p) => p.market));
+    adjusted = run((p) => (p.mentions * typical) / p.market, 1);
+    market = run((p) => p.market, 1, { countBase: 1e9 });
+  }
   return { raw, adjusted, market };
 }
 
 function labelFor(view, level) {
-  if (level < CONFIG.minLevel) return 'Quiet';
   const m = view.adjusted || view.raw;
-  const hit = CONFIG.thresholds.find((t) => m.ratio >= t.ratio && m.z >= t.z);
-  return hit ? hit.label : 'Quiet';
+  const hit = level >= CONFIG.minLevel ? CONFIG.thresholds.find((t) => m.ratio >= t.ratio && m.z >= t.z) : null;
+  if (hit) return hit.label;
+  // Too few mentions to tell a real change from chance: say so rather than a falsely reassuring "Quiet"
+  return view.raw.baselineMedian < CONFIG.lowVolume && level < CONFIG.minLevel ? 'Low volume' : 'Quiet';
 }
 
 function confidenceOf(coverage) {
@@ -110,6 +125,9 @@ function describe({ horizon, window, baselineText, view, label, latest, rankText
     parts.push(
       `Overall Reddit stock chatter is ${x(market.ratio)} normal, so adjusted for that it is ${x(adjusted.ratio)} normal (z ${fmt(adjusted.z)}).`
     );
+  }
+  if (label === 'Low volume') {
+    parts.push(`It typically gets fewer than ${CONFIG.lowVolume} mentions a day, too few to tell a real change from chance, so it is not rated.`);
   }
   if (rankText) parts.push(rankText);
   parts.push(`Label: ${label}.`);
@@ -163,14 +181,16 @@ function scoreShort(series, ticker) {
     coverage = 0.75 * Math.min(1, spanDays / 7);
   }
 
-  const view = viewOf([latest], baseline);
+  const spreadPoints = dailyPoints(series, now, 1, CONFIG.spreadDays + 1, cfg.toleranceMs);
+  const nDays = lags >= cfg.minWeeklyLags ? lags : Math.max(1, Math.min(7, Math.round((now - baseline[0].t) / DAY)));
+  const view = viewOf([latest], baseline, { spreadPoints, nDays });
   let label = labelFor(view, latest.mentions);
   const result = { horizon: 'short', status: 'ok', confidence: confidenceOf(coverage), coverage, ...view };
 
   // A single-snapshot glitch must not flag a stock: the previous snapshot has to agree at least at Rising level
   const prev = [...series].reverse().find((p) => p.t <= now - cfg.persistenceGapMs);
   if (rank(label) > 1 && prev) {
-    const prevLabel = labelFor(viewOf([prev], baseline), prev.mentions);
+    const prevLabel = labelFor(viewOf([prev], baseline, { spreadPoints, nDays }), prev.mentions);
     if (rank(prevLabel) < 1) {
       label = 'Rising';
       result.unconfirmed = true;
@@ -191,7 +211,7 @@ function scoreDaily(series, ticker, horizon) {
   if (current.length < cfg.minCurrent || baseline.length < cfg.minBaseline) {
     return warmingUp(horizon, `Needs ${cfg.minCurrent}+ days of recent data and ${cfg.minBaseline}+ earlier days; have ${current.length} and ${baseline.length}.`);
   }
-  const view = viewOf(current, baseline);
+  const view = viewOf(current, baseline, { nDays: baseline.length });
   const label = labelFor(view, view.raw.current);
   const coverage = horizon === 'medium' ? baseline.length / cfg.baselineDays : baseline.length / 365;
   const window = horizon === 'medium' ? 'a typical day this past week' : 'a typical day over the last four weeks';

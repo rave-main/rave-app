@@ -6,7 +6,7 @@ const KIND = 'apewisdom';
 const TOP_N_STORED = 100; // watchlist tickers are always stored; so is the top of the leaderboard
 const MIN_INTERVAL_MS = 10 * 60 * 1000; // restarts and overlapping deploys must not hammer the source
 const ABANDONED_AFTER_MIN = 15;
-const RAW_RETENTION_DAYS = 30;
+const RAW_RETENTION_DAYS = 7; // about 112 KB per run: 7 days is ~40 MB, and the Railway volume is 500 MB
 const INTERVAL_MS = 30 * 60 * 1000;
 const JITTER_MS = 5 * 60 * 1000;
 

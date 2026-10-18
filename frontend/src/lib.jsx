@@ -74,3 +74,15 @@ export const num = (n) => (n === null || n === undefined ? '—' : Math.round(n)
 export const times = (r) => (r === null || r === undefined ? '—' : `${r >= 10 ? Math.round(r) : r.toFixed(1)}×`);
 export const clock = (iso) => new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 export const dateTime = (iso) => new Date(iso).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+// z-score in plain words (z measures how many typical day-to-day swings away from normal today is)
+export function unusual(z) {
+  if (z === null || z === undefined) return '';
+  if (z >= 4) return 'very unusual';
+  if (z >= 3) return 'unusual';
+  if (z >= 2) return 'elevated';
+  if (z <= -3) return 'unusually low';
+  if (z <= -2) return 'low';
+  return 'normal range';
+}
+export const pct = (ratio) => (ratio === null || ratio === undefined ? null : `${ratio >= 1 ? '+' : '−'}${Math.round(Math.abs(ratio - 1) * 100)}%`);

@@ -104,3 +104,26 @@ met after repeated attempts; results show no signal.
   Recharts animations made screenshots show half-drawn charts (animations off).
 - Added docs/DATA_PIPELINE.md (collection, storage, aggregation).
 - PENDING USER DECISION: release this to main. Previews and the live site depend on the new backend endpoints.
+
+### 2026-10-18 Accuracy, integrity and cost review (user asked: older data? stored correctly? metrics accurate? costs?)
+- VERIFIED: ApeWisdom `mentions` is a rolling 24h count (equals the sum of the 10-minute buckets on its ticker pages,
+  exactly, for 9 tickers). ApeWisdom's API has no history; ticker pages embed ~22h of 10-minute buckets (HTML, unofficial).
+  Methodology page: scans twice an hour; ticker counted once per post/comment; capitals or $ prefix.
+- FOUND (accuracy): at realistic volumes the scoring was weak. 17/day: 8.8 false Rising flags a quarter; below ~8/day
+  nearly useless. Cause: spread estimated from 4-8 independent days. Fixed (spread from 28 daily observations,
+  Poisson floor, baseline-uncertainty inflation) and added a "Low volume" label. FOUND a second flaw in the market
+  adjustment (per-mille share compressed by log1p); now adjusts in mention units. Accuracy table in METHODOLOGY.md.
+  Independent Python re-implementation matches the Node scoring exactly (28 numbers).
+- BUILT: integrity audit (`/api/rave/integrity`, Data page card). Found and fixed a bug in it via a test (runs whose raw
+  data had expired looked like mismatches). Real-data run: collector x2 against live ApeWisdom into a clean DB, all 6
+  checks pass on 822 tickers.
+- Storage: 249 bytes/row incl. indexes, 450 MB/year; volume is 500 MB. Raw retention cut 30 -> 7 days. Database size
+  shown on the Data page (`DB_SIZE_LIMIT_MB` to override the 500).
+- UI: rank arrows were backwards (improved rank showed down) - fixed; "vs 24h" shows percent; z-scores shown in words;
+  Low volume chip/filter; footnote explaining each column.
+- COSTS: docs/COSTS_AND_LIMITS.md. Railway trial 30 days / $5 credit, measured ~$2.2/month, Hobby $5/month after.
+- DATA FACT: of 820 tickers only 22 have 17+ mentions/day, 43 have 8+; the whole leaderboard is ~1,900 mentions/day
+  (a Sunday; weekdays are probably higher). Four of the ten watchlist stocks are low volume.
+- Open decisions for the user: release to main; watchlist (add high-volume names?); whether to also read ApeWisdom's
+  10-minute ticker pages (backfill ~22h and repair gaps) given it is an unofficial page; whether to pursue an older-history
+  source (Wikipedia pageviews is free/official, daily since 2015; Reddit archives are heavy); upgrade Railway before ~17 Nov.

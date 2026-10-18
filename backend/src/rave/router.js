@@ -2,9 +2,12 @@ const express = require('express');
 const { wrap } = require('../auth');
 const { loadSeries } = require('./series');
 const { scoreStock } = require('./scoring');
+const { auditRuns } = require('./audit');
 
 const STALE_AFTER_MIN = 90; // the collector runs about every 30 minutes
 const EXPECTED_INTERVAL_MIN = 30;
+// Railway's Postgres volume is 500 MB on the current plan; set DB_SIZE_LIMIT_MB if it is resized
+const DB_LIMIT_MB = Number(process.env.DB_SIZE_LIMIT_MB) || 500;
 
 // ApeWisdom's own comparison with 24 hours earlier; available from the very first snapshot
 function dayOverDay(r) {
@@ -64,6 +67,12 @@ function raveRouter(pool) {
     })));
   }));
 
+  // Re-verifies stored data against the raw responses (last `runs` successful runs, default 48 = about a day)
+  router.get('/integrity', wrap(async (req, res) => {
+    const runs = Math.min(Math.max(parseInt(req.query.runs, 10) || 48, 1), 500);
+    res.json(await auditRuns(pool, { runs }));
+  }));
+
   // Recent collection runs, newest first, each flagged with whether ApeWisdom's data changed since the run before
   router.get('/runs', wrap(async (req, res) => {
     const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 30, 1), 200);
@@ -112,6 +121,8 @@ function raveRouter(pool) {
                   FROM collection_runs WHERE kind = 'apewisdom' AND started_at > now() - interval '24 hours'`),
       pool.query(`SELECT min(fetched_at) AS "firstSnapshotAt", count(DISTINCT fetched_at)::int AS snapshots FROM snapshots`),
     ]);
+    const { rows: [{ bytes }] } = await pool.query('SELECT pg_database_size(current_database())::float AS bytes');
+    const sizeMB = Math.round(bytes / 1048576);
     const { rows: [change] } = await pool.query(
       `WITH runs AS (${RUNS_WITH_CHANGE})
        SELECT max(started_at) FILTER (WHERE changed) AS "lastChangeAt",
@@ -125,6 +136,7 @@ function raveRouter(pool) {
       stale: ageMin === null || ageMin > STALE_AFTER_MIN,
       minutesSinceLastSuccess: ageMin === null ? null : Math.round(ageMin),
       expectedIntervalMinutes: EXPECTED_INTERVAL_MIN,
+      database: { sizeMB, limitMB: DB_LIMIT_MB, usedPercent: Math.round((100 * sizeMB) / DB_LIMIT_MB) },
       lastChangeAt: change.lastChangeAt,
       unchangedRuns: change.unchangedRuns,
       lastSuccess: lastSuccess || null,

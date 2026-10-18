@@ -174,3 +174,14 @@ td.num small { display: inline; margin-left: 4px; }
 .score h3 { margin: 0; } .score p { margin: 6px 0; }
 .big-num { font-size: 1.5rem; font-weight: 600; } .big-num small { font-size: 0.78rem; color: var(--muted); font-weight: 400; }
 .why { color: var(--text); font-size: 0.85rem; line-height: 1.55; opacity: 0.9; }
+
+.chip.low-volume { border-style: dashed; color: var(--muted); }
+.warn-text { color: var(--warn); }
+.integrity { margin-top: 20px; }
+.integrity h2 { margin-bottom: 10px; }
+.verdict { margin: 0 0 10px; font-size: 1rem; }
+.tick { color: var(--ok); font-weight: 700; } .cross { color: var(--err); font-weight: 700; }
+.checks { list-style: none; padding: 0; margin: 0; display: grid; gap: 4px; font-size: 0.85rem; color: var(--muted); }
+.checks li span { display: inline-block; width: 1.2em; font-weight: 700; }
+.checks li.ok span { color: var(--ok); } .checks li.bad { color: var(--text); } .checks li.bad span { color: var(--err); }
+.integrity.fail { border-color: rgba(255, 92, 122, 0.6); }

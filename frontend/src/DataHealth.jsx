@@ -14,6 +14,7 @@ export default function DataHealth() {
   useTick(15000);
   const { status, error, now } = useStatus();
   const { data: runs } = usePoll('/rave/runs?limit=40', 30000);
+  const { data: audit } = usePoll('/rave/integrity?runs=48', 300000);
   if (error && !status) return <p className="banner err">Could not load status — {error.message}</p>;
   if (!status) return <p className="muted">Loading…</p>;
 
@@ -44,6 +45,12 @@ export default function DataHealth() {
           sub={status.history.firstSnapshotAt ? `since ${dateTime(status.history.firstSnapshotAt)}` : 'nothing stored yet'}
         />
         <Stat
+          title="Database"
+          value={`${num(status.database.sizeMB)} MB`}
+          tone={status.database.usedPercent >= 80 ? 'stale' : status.database.usedPercent >= 60 ? 'delayed' : ''}
+          sub={`${status.database.usedPercent}% of the ${num(status.database.limitMB)} MB volume`}
+        />
+        <Stat
           title="Last 24 hours"
           value={`${status.last24h.success} ok · ${status.last24h.failed} failed`}
           tone={status.last24h.failed ? 'delayed' : ''}
@@ -53,6 +60,29 @@ export default function DataHealth() {
 
       {status.lastRun?.status === 'failed' && (
         <p className="banner err">Latest run failed: {status.lastRun.error}. RAVE keeps the previous data and retries at the next check.</p>
+      )}
+
+      {audit && (
+        <section className={`card integrity ${audit.ok ? 'pass' : 'fail'}`}>
+          <h2>
+            Data integrity <small>re-checks the stored data against the raw responses, last {audit.runsChecked} runs</small>
+          </h2>
+          <p className="verdict">
+            {audit.ok ? <><span className="tick">✓</span> All {audit.checks.length} checks passed.</> : <><span className="cross">✕</span> {audit.checks.filter((c) => !c.ok).length} check(s) failed.</>}
+            {audit.cadence.gapsOver45Min > 0
+              ? <span className="warn-text"> {audit.cadence.gapsOver45Min} gap{audit.cadence.gapsOver45Min === 1 ? '' : 's'} in collection (longest {audit.cadence.longestGapMinutes} min).</span>
+              : <span className="muted"> No gaps in collection.</span>}
+          </p>
+          <ul className="checks">
+            {audit.checks.map((c) => (
+              <li key={c.id} className={c.ok ? 'ok' : 'bad'}>
+                <span>{c.ok ? '✓' : '✕'}</span> {c.label}
+                {c.problems.slice(0, 3).map((pr) => <small key={pr} className="err-text"> {pr}</small>)}
+              </li>
+            ))}
+          </ul>
+          {audit.note && <p className="foot">{audit.note}</p>}
+        </section>
       )}
 
       <section className="card">

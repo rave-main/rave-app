@@ -27,7 +27,8 @@ One collection run = one timestamp (`fetched_at` = when the run started). From t
 - the **market total** = sum of mentions over ALL tickers on the leaderboard (including the ones not stored),
   saved on the run. It is the denominator for the market-adjusted ("share") view.
 That is about 103 snapshot rows per run, about 4,900 a day, about 1.8 million a year.
-The raw API responses (all pages, JSON) are also kept: (live) about 112 KB per run, so roughly 5 MB a day.
+The raw API responses (all pages) are also kept for 7 days: (live) about 112 KB of JSON per run, about 76 KB as stored
+(compressed), so roughly 26 MB at steady state. They exist so stored values can be re-verified (see Integrity below).
 
 ## 3. Where it is stored
 Postgres, in the Railway project `rave-app` (service `Postgres`, with a persistent volume, reachable only on
@@ -39,7 +40,7 @@ sign-in protected `/api/rave/*` endpoints. Tables (migrations in `backend/src/db
 | `watchlist` | tracked stock | ticker, name, is_control, active | permanent, editable |
 | `collection_runs` | collection attempt | status (running/success/failed), start/finish, pages fetched/total, tickers seen, rows written, market total mentions, error text | permanent |
 | `snapshots` | stock per run | ticker, fetched_at, ranked, rank, mentions, upvotes, rank_24h_ago, mentions_24h_ago. Unique on (source, ticker, fetched_at) | permanent |
-| `raw_snapshots` | page per run | the untouched JSON page | 30 days, then deleted |
+| `raw_snapshots` | page per run | the untouched JSON page | 7 days, then deleted |
 
 A run's raw pages, snapshot rows and its final status are written in ONE database transaction, so a run is either
 fully saved or not saved at all. Not stored: tickers outside the top 100 that are not on the watchlist (only counted in
@@ -57,8 +58,26 @@ No backup or export routine has been set up. The volume survives deploys, but a 
 - Sparklines (last 48 points), day-over-day (ApeWisdom's own 24h-ago figure) and the status/freshness figures are
   also computed per request. Rollups or caching are planned before a year of data accumulates (milestone 5).
 
-## 5. What is confirmed vs assumed
-- (live, 2026-10-18) The adapter works against the real service and the first production run saved 816 tickers /
-  103 rows. The source's top-100 changed between samples taken 3 minutes apart, so it updates at least every few minutes.
-- (assumed, to verify) that `mentions` is a rolling 24-hour count: mentions at t should be close to
-  `mentions_24h_ago` at t + 24h. Checkable after about 24 hours of collected data.
+## 5. Integrity checks (`/api/rave/integrity`, shown on the Data page)
+For the last 48 successful runs RAVE re-derives what should be stored from the raw responses and compares: rows saved
+equal rows reported; every watchlist stock present in every run; raw pages and ticker counts equal what the run
+reported; the stored leaderboard total equals the sum of raw mentions; every stored mention count and rank equals the
+raw response. It also reports gaps in the 30-minute cadence. Verified on real data (2 live runs, 822 tickers: all pass)
+and with tests that corrupt each kind of value and confirm it is caught. Runs older than the raw retention are
+checked for row counts only.
+
+## 6. Storage growth
+Measured: about 249 bytes per `snapshots` row including indexes (21,130 rows = 5.1 MB), 103 rows per run, 48 runs a day:
+about 1.2 MB a day, 450 MB a year. With 7 days of raw data (~26 MB) and Postgres's own ~84 MB, a 500 MB volume lasts
+roughly 10-11 months. The Data page shows database size against the volume. Levers if needed: a bigger volume (paid
+plan), storing the top 100 less often than every run, or rolling old rows up to hourly.
+
+## 7. What is confirmed vs assumed
+- (verified 2026-10-18) `mentions` is a rolling 24-hour count: it equals the sum of ApeWisdom's 10-minute buckets over
+  24 hours for GME, NVDA, TSLA, MSFT, AAPL, PLTR, HOOD, SOFI, AMC exactly.
+- ApeWisdom's methodology page says it scans the subreddits twice an hour; a ticker counts once per post or comment
+  even if named several times; tickers are detected when written in capitals or with a $ prefix (so ambiguous
+  tickers such as common words are noisier); only tickers listed on its sister site are shown.
+- (live) The first production run saved 816 tickers / 103 rows; the source's top-100 changed between samples 3 minutes apart.
+- ApeWisdom's API has NO history. Its per-ticker web pages embed about 22 hours of 10-minute buckets; that is an
+  unofficial page (robots.txt only disallows /gotopage/; no terms page found), not an API.

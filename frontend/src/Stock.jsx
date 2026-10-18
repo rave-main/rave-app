@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { LabelChip } from './Radar.jsx';
-import { ago, dateTime, num, times, usePoll, useStatus, useTick } from './lib.jsx';
+import { ago, dateTime, num, times, unusual, usePoll, useStatus, useTick } from './lib.jsx';
 
 const RANGES = [['24h', 24], ['3d', 72], ['7d', 168], ['30d', 720]];
 const HORIZONS = [['short', 'Short', 'last 24 hours'], ['medium', 'Medium', 'typical day this week'], ['long', 'Long', 'typical day over 4 weeks']];
@@ -67,7 +67,7 @@ export default function Stock() {
             <article key={k} className="card score">
               <header><h3>{name}</h3><LabelChip label={s.label} /></header>
               <p className="muted">{desc}</p>
-              {s.status === 'ok' && m && <p className="big-num">{times(m.ratio)} <small>normal · z {m.z.toFixed(1)} · confidence {s.confidence}</small></p>}
+              {s.status === 'ok' && m && s.label !== 'Low volume' && <p className="big-num">{times(m.ratio)} <small>normal · {unusual(m.z)} · confidence {s.confidence}</small></p>}
               <p className="why">{s.explanation}</p>
             </article>
           );

@@ -1,11 +1,11 @@
 import { useMemo } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import Sparkline from './Sparkline.jsx';
-import { ago, dateTime, num, times, usePoll, useStatus, useTick } from './lib.jsx';
+import { ago, dateTime, num, pct, times, unusual, usePoll, useStatus, useTick } from './lib.jsx';
 
 const ORDER = { Extreme: 3, Hot: 2, Rising: 1, Quiet: 0 }; // anything else (Warming up, No data) sorts below Quiet
 const HORIZONS = [['short', 'Short · 24h'], ['medium', 'Medium · 7d'], ['long', 'Long · 4w']];
-const LABELS = ['Extreme', 'Hot', 'Rising', 'Quiet', 'Warming up'];
+const LABELS = ['Extreme', 'Hot', 'Rising', 'Quiet', 'Low volume', 'Warming up'];
 
 export const LabelChip = ({ label }) => <span className={`chip ${label.toLowerCase().replace(' ', '-')}`}>{label}</span>;
 
@@ -18,11 +18,11 @@ const sortValue = {
   rank: (r) => (r.ranked ? -r.rank : -Infinity), // a better (smaller) rank sorts higher
 };
 
-function Arrow({ now, before, better = 'up' }) {
+// For rank, a smaller number is better: ▲ green = moved up the leaderboard, ▼ red = moved down
+function RankMove({ now, before }) {
   if (before === null || before === undefined || now === null || now === undefined || now === before) return null;
-  const up = now > before;
-  const good = better === 'up' ? up : !up;
-  return <span className={`delta ${good ? 'good' : 'bad'}`}>{up ? '▲' : '▼'}</span>;
+  const up = now < before;
+  return <span className={`delta ${up ? 'good' : 'bad'}`} title={`was #${before} a day ago`}>{up ? '▲' : '▼'}</span>;
 }
 
 export default function Radar() {
@@ -130,7 +130,7 @@ export default function Radar() {
                 {th('label', 'Signal')}
                 {th('mentions', 'Mentions 24h', 'num')}
                 {th('dod', 'vs 24h', 'num')}
-                {th('ratio', 'vs normal', 'num')}
+                <th className="sortable num" onClick={() => sortBy('ratio')} title="Today compared with this stock's own usual level, adjusted for overall Reddit chatter" aria-sort={sort === 'ratio' ? (dir === 'asc' ? 'ascending' : 'descending') : 'none'}>vs normal{sort === 'ratio' && <span className="sort-ind">{dir === 'asc' ? ' ↑' : ' ↓'}</span>}</th>
                 {th('rank', 'Rank', 'num')}
                 <th>Last 24h</th>
                 <th className="num">Updated</th>
@@ -145,9 +145,9 @@ export default function Radar() {
                     <td><Link to={`/stock/${r.ticker}`} onClick={(e) => e.stopPropagation()} className="tk"><strong>{r.ticker}</strong></Link><small>{r.name}{r.isControl ? ' · control' : ''}</small></td>
                     <td><LabelChip label={s.label} />{s.unconfirmed && <small title="Waiting for the next snapshot to confirm"> unconfirmed</small>}</td>
                     <td className="num">{r.fetchedAt ? (r.ranked ? num(r.mentions) : <span className="muted" title="Not on the ApeWisdom leaderboard">0</span>) : '—'}</td>
-                    <td className="num">{r.dayOverDay ? <>{r.dayOverDay.change > 0 ? '+' : ''}{r.dayOverDay.change}{r.dayOverDay.ratio ? <small> {times(r.dayOverDay.ratio)}</small> : null}</> : '—'}</td>
-                    <td className="num" title={s.explanation}>{m ? <>{times(m.ratio)}<small> z {m.z.toFixed(1)}</small></> : <span className="muted">warming up</span>}</td>
-                    <td className="num">{r.ranked ? <>#{r.rank} <Arrow now={r.rank} before={r.rank24hAgo} better="down" /></> : <span className="muted">—</span>}</td>
+                    <td className="num">{r.dayOverDay ? <>{r.dayOverDay.change > 0 ? '+' : ''}{r.dayOverDay.change}{r.dayOverDay.ratio ? <small> {pct(r.dayOverDay.ratio)}</small> : <small> new</small>}</> : '—'}</td>
+                    <td className="num" title={s.explanation}>{s.label === 'Low volume' ? <span className="muted" title="Too few mentions to rate">—</span> : m ? <>{times(m.ratio)}<small> {unusual(m.z)}</small></> : <span className="muted">warming up</span>}</td>
+                    <td className="num">{r.ranked ? <>#{r.rank} <RankMove now={r.rank} before={r.rank24hAgo} /></> : <span className="muted">—</span>}</td>
                     <td><Sparkline values={r.spark} /></td>
                     <td className="num"><small>{r.fetchedAt ? ago(now() - new Date(r.fetchedAt).getTime()) : '—'}</small></td>
                   </tr>
@@ -157,7 +157,11 @@ export default function Radar() {
             </tbody>
           </table>
         </div>
-        <p className="foot">Mentions are Reddit stock mentions in the last 24 hours (ApeWisdom). “vs normal” compares with the stock’s own history; hover it for the reasoning.</p>
+        <p className="foot">
+          <strong>Mentions 24h</strong>: Reddit posts and comments mentioning the ticker in the last 24 hours (ApeWisdom). <strong>vs 24h</strong>: change from a day ago.
+          <strong> vs normal</strong>: today against this stock’s own usual level, adjusted for overall Reddit chatter (hover a value for the full reasoning).
+          <strong> Low volume</strong>: typically fewer than 5 mentions a day, too few to separate a real change from chance, so it is not rated.
+        </p>
       </section>
     </>
   );

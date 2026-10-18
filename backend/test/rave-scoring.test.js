@@ -2,7 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { scoreStock, CONFIG } = require('../src/rave/scoring');
 const { median, scaledMad } = require('../src/rave/stats');
-const { simulate, START, DAY, HOUR } = require('./rave-sim');
+const { simulate, simulateCounts, START, DAY, HOUR } = require('./rave-sim');
 
 const flagged = (label) => label === 'Hot' || label === 'Extreme';
 const boost = (from, to, factor) => (t) => (t >= from && t < to ? factor : 1);
@@ -108,16 +108,70 @@ test('a single-snapshot glitch is capped at Rising until the next snapshot confi
   assert.match(s.short.explanation, /Capped at Rising/);
 });
 
-test('the minimum-activity rule: 8 mentions a day never flags, 12 does (default minLevel is 10)', () => {
-  const steady = (days, last) => {
+test('the minimum-activity rule: under 10 mentions never flags; 12 does', () => {
+  const steady = (days, level, last) => {
     const pts = Array.from({ length: days * 48 }, (_, i) => ({
-      t: START + i * (HOUR / 2), mentions: 2 + (i % 3 === 0 ? 1 : 0), market: 5000, ranked: true, rank: 90, rank24hAgo: 90, mentions24hAgo: 2,
+      t: START + i * (HOUR / 2), mentions: level + (i % 3 === 0 ? 1 : 0), market: 5000, ranked: true, rank: 90, rank24hAgo: 90, mentions24hAgo: level,
     }));
     return [...pts.slice(0, -2), { ...pts[pts.length - 2], mentions: last }, { ...pts[pts.length - 1], mentions: last }];
   };
   assert.equal(CONFIG.minLevel, 10);
-  assert.equal(scoreStock(steady(30, 8)).short.label, 'Quiet');
-  assert.ok(flagged(scoreStock(steady(30, 12)).short.label));
+  // a typical 2 a day jumping to 8: below the minimum activity, and too thin to rate, so "Low volume", never flagged
+  assert.equal(scoreStock(steady(30, 2, 8)).short.label, 'Low volume');
+  // a typical 6 a day (enough to rate) reaching 8: not flagged, simply Quiet
+  assert.equal(scoreStock(steady(30, 6, 8)).short.label, 'Quiet');
+  // from a typical 2 a day, 12 is clearly unusual (Rising) and 30 is a very large jump (Hot or above); the call is
+  // deliberately conservative at tiny counts, where chance alone moves the numbers a lot
+  assert.equal(scoreStock(steady(30, 2, 12)).short.label, 'Rising');
+  assert.ok(flagged(scoreStock(steady(30, 2, 30)).short.label));
+});
+
+test('stocks that rarely get mentioned are labelled Low volume, with an explanation, not Quiet', () => {
+  const s = scoreStock(simulateCounts({ days: 40, level: 1, seed: 31 }), { ticker: 'RIVN' });
+  assert.equal(s.short.label, 'Low volume');
+  assert.match(s.short.explanation, /fewer than 5 mentions a day/);
+  assert.equal(s.summary.label, 'Low volume');
+});
+
+// Realistic volumes: counts are small (the live leaderboard averages about 2 mentions per ticker), so these
+// regimes matter more than the 100-a-day simulator above.
+function regime({ level, trials, seeds }) {
+  const end = START + 45 * DAY;
+  let rise3 = 0, hot3 = 0;
+  for (let t = 1; t <= trials; t++) {
+    const l = scoreStock(simulateCounts({ days: 45, level, seed: 7000 + t, multiplier: boost(end - 36 * HOUR, end + DAY, 3) })).short.label;
+    if (l !== 'Quiet' && l !== 'Low volume') rise3++;
+    if (flagged(l)) hot3++;
+  }
+  let hotEpisodes = 0, evals = 0;
+  for (let seed = 1; seed <= seeds; seed++) {
+    const series = simulateCounts({ days: 125, level, seed: 5000 + seed });
+    let on = false;
+    for (let i = 36 * 48; i < series.length; i += 12) {
+      const now = flagged(scoreStock(series.slice(0, i + 1)).short.label);
+      if (now && !on) hotEpisodes++;
+      on = now;
+      evals++;
+    }
+  }
+  return { rise3: rise3 / trials, hot3: hot3 / trials, falseHotPerQuarter: hotEpisodes / (evals / (4 * 90)) };
+}
+
+test('at 45 mentions a day (e.g. NVDA today): surges are caught and false Hot flags are rare', () => {
+  const r = regime({ level: 45, trials: 40, seeds: 3 });
+  assert.ok(r.hot3 >= 0.9, `3x -> Hot+ ${r.hot3}`);
+  assert.ok(r.falseHotPerQuarter <= 1, `false Hot+ per quarter ${r.falseHotPerQuarter}`);
+});
+
+test('at 17 mentions a day (e.g. GME today): a 3x surge is at least Rising 90% of the time, false Hot flags are rare', () => {
+  const r = regime({ level: 17, trials: 40, seeds: 3 });
+  assert.ok(r.rise3 >= 0.9, `3x -> Rising+ ${r.rise3}`);
+  assert.ok(r.falseHotPerQuarter <= 1, `false Hot+ per quarter ${r.falseHotPerQuarter}`);
+});
+
+test('at 4 mentions a day: never a false Hot flag (detection is weak by nature, and the label says Low volume)', () => {
+  const r = regime({ level: 4, trials: 20, seeds: 3 });
+  assert.ok(r.falseHotPerQuarter <= 1, `false Hot+ per quarter ${r.falseHotPerQuarter}`);
 });
 
 test('a stock that drops off the leaderboard is Quiet and says so', () => {
