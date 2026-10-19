@@ -50,10 +50,23 @@ function candidateProbes() {
   ];
 }
 
+// Round two: retries with what round one taught us (SEC wants a contact in the user agent; GDELT allows one request every 5 seconds;
+// Yahoo wants a cookie and crumb; Arctic Shift may offer daily counts)
+function candidateProbes2() {
+  const sec2 = { headers: { 'User-Agent': 'RAVE Research rave-main@users.noreply.github.com', 'Accept-Encoding': 'gzip, deflate', Host: 'data.sec.gov' } };
+  return [
+    ['sec-submissions-2', 'https://data.sec.gov/submissions/CIK0001326380.json', (b) => ({ ok: Array.isArray(b?.filings?.recent?.form), detail: `${b?.filings?.recent?.form?.length ?? 0} recent filings` }), sec2],
+    ['sec-efts-search', 'https://efts.sec.gov/LATEST/search-index?q=%22results%20of%20operations%22&forms=8-K&dateRange=custom&startdt=2026-10-01&enddt=2026-10-15', (b) => ({ ok: Boolean(b?.hits), detail: `${b?.hits?.total?.value ?? 0} hits` }), { headers: { 'User-Agent': 'RAVE Research rave-main@users.noreply.github.com' } }],
+    ['arctic-aggregate', 'https://arctic-shift.photon-reddit.com/api/comments/search/aggregate?subreddit=wallstreetbets&body=GME&aggregate=created_utc&frequency=month&after=2024-01-01&before=2024-04-01', (b) => ({ ok: Array.isArray(b?.data), detail: `${b?.data?.length ?? 0} buckets: ${JSON.stringify(b?.data?.slice(0, 3))}` })],
+    ['arctic-posts-count', 'https://arctic-shift.photon-reddit.com/api/posts/search?subreddit=wallstreetbets&limit=100&after=2025-03-03&before=2025-03-04&fields=title,created_utc,score,num_comments', (b) => ({ ok: Array.isArray(b?.data), detail: `${b?.data?.length ?? 0} posts in one day (limit 100)` })],
+    ['yahoo-cookie', 'https://fc.yahoo.com/', (b, t, s) => ({ ok: s === 404 || s === 200, detail: `status ${s}` }), { headers: { 'User-Agent': BROWSER_UA } }],
+  ];
+}
+
 async function runDiagnostics(extra = [], opts = {}) {
   const out = [];
   for (const [source, url, check, o] of probes(extra)) out.push(await probe(source, url, check, { ...opts, ...(o || {}) }));
   return out;
 }
 
-module.exports = { runDiagnostics, probe, probes, candidateProbes };
+module.exports = { runDiagnostics, probe, probes, candidateProbes, candidateProbes2 };
