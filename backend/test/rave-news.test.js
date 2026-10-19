@@ -35,14 +35,14 @@ function fakeGdelt({ limitFirst = 0, empty = [] } = {}) {
   return { fetchImpl, calls };
 }
 
-test('the job fetches a year for a new stock, only a month later, keeps what it had, and survives one rate-limit reply', async () => {
+test('the job fetches six months for a new stock, only a month later, keeps what it had, and survives one rate-limit reply', async () => {
   await resetRave(pool);
   await seedHistory(pool, { GME: simulateCounts({ days: 2, level: 30, seed: 1 }), NEWS2: simulateCounts({ days: 2, level: 20, seed: 2 }) });
   await pool.query(`UPDATE tickers SET name = 'GameStop' WHERE ticker = 'GME'`);
   const g = fakeGdelt({ limitFirst: 1 });
   const first = await news.runNews(pool, { fetchImpl: g.fetchImpl, gapMs: 1, log: { log() {}, error() {} } });
   assert.deepEqual([first.fetched, first.errorCount], [2, 0]);
-  assert.ok(g.calls.every((c) => c.span === '1y'));
+  assert.ok(g.calls.every((c) => c.span === '6months'));
   assert.equal(g.calls.length, 5, 'two requests for each stock plus the retried one');
   const rows = (await news.loadNews(pool, ['GME'])).get('GME');
   assert.equal(rows.length, 5);

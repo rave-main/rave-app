@@ -9,8 +9,11 @@ All times are UTC. Defined in `backend/src/rave/jobs.js`; run by `scheduler.js`.
 |---|---|---|---|
 | ApeWisdom leaderboard | :02 and :32 every hour | Reddit mentions for every stock on the leaderboard (about 820, 9 pages) | Free, no key. The source scans about twice an hour, so more often gains nothing. No history is offered, so RAVE builds its own. 10-minute ticker pages are deliberately NOT scraped. |
 | Wikipedia page views | 04:30, 16:30 | Daily views of each company's Wikipedia page (people, not bots) | Wikimedia API, free. 5-year backfill, then a top-up. A day's views appear the next day. |
-| Share prices | 12:30, 22:30 | Daily open/high/low/close/volume in US dollars, plus SPY as the market benchmark | Yahoo Finance chart endpoint only (unofficial, free). 2-year backfill, 10-day overlap on each top-up, full refresh weekly (splits). |
-| Hypothesis tests | 05:15, 23:15 | Wikipedia backtest, forward-ledger outcomes | See METHODOLOGY.md. |
+| Share prices | 12:30, 22:30 | Daily open/close/volume in US dollars for the Reddit stocks and the whole research universe, plus SPY as the market benchmark | Yahoo Finance chart endpoint only (unofficial, free). 5-year backfill, 10-day overlap on each top-up, full refresh weekly (splits). |
+| Research universe | daily 03:10, refreshes weekly | S&P 500, 400 and 600 members (about 1,500 US companies) with their Wikipedia articles, when each joined, and the companies that left since 2021 | Wikipedia index lists (`universe.js`). Gives a research sample that does not depend on hindsight; the leavers are kept so results are not flattered by survivors. |
+| Company results dates | 02:20, 14:20 | Next announced results date per stock | Yahoo quote-summary calendar (cookie and crumb); each stock re-checked every 5 days; past dates stay, so a real history builds up from 19 Oct 2026. |
+| News attention and tone | 06:40, 18:40 | Share of world news mentioning the company and its average tone, per day, for the 300 most talked-about companies | GDELT; one request every 7 seconds (it throttles), so progress is slow and it may fail on some days. Not yet proven useful. |
+| Hypothesis tests | 05:15, 23:15 | Wikipedia backtest, strategy lab, forward-ledger outcomes | See METHODOLOGY.md. |
 
 **Scheduler rules.** A job is *due* if it has no successful run since its latest scheduled time, so a restart, deploy or
 missed run catches up by itself. Failures retry with backoff (5 min, doubling, up to 1 hour). A run that stopped at its time
@@ -39,7 +42,10 @@ Migrations are in `backend/src/db.js` (append only, run on start).
 | `raw_snapshots` | untouched API pages, 7 days |
 | `wiki_pages` | stock to Wikipedia article match (status, confidence, source auto/override) |
 | `wiki_months` | daily page views, one row per article per month (31 slots) |
-| `prices`, `price_sync` | daily prices per stock; last sync and last error per stock |
+| `bars`, `price_sync` | daily prices, ONE row per stock with parallel arrays (day number, open, close, volume): about 15 KB for five years, so about 2,500 stocks cost roughly 40 MB; last sync and last error per stock |
+| `universe` | research universe members: ticker, name, Wikipedia article, index, sector, added_day, removed_day, active |
+| `earnings_dates`, `earnings_checks` | announced company results dates; when each stock was last checked |
+| `news_months`, `news_checks` | news volume and tone per stock per month (31 day slots) |
 | `validation_runs` | stored hypothesis-test results |
 | `spike_events` | forward ledger of Reddit spikes with entry price and 1/5/20-day outcomes |
 | `alert_channels` | placeholder for Slack alerts; nothing reads it |

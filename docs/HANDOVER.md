@@ -30,7 +30,11 @@ The owner is not an investment expert: wording must stay simple, in British Engl
 | `series.js`, `scoring.js` | build series; scores (times normal, how unusual, label) for 3 horizons |
 | `tracked.js` | every stock with Reddit score, Wikipedia signal, price; cached per run |
 | `wiki.js`, `wikijob.js` | match stocks to Wikipedia pages, daily page views |
-| `prices.js`, `pricejob.js` | Yahoo prices (only source), 2-year backfill, SPY benchmark |
+| `prices.js`, `pricejob.js` | Yahoo prices (only source), compact `bars` storage, 5-year backfill, SPY benchmark |
+| `universe.js` | S&P 500/400/600 members, joiners and leavers from Wikipedia |
+| `earnings.js` | upcoming results dates from Yahoo (cookie + crumb) |
+| `news.js` | GDELT news volume and tone |
+| `export.js` | paged raw data for offline research (`/api/rave/export/lab`) |
 | `validation.js`, `research.js` | event study, lead-lag, verdicts; Wikipedia backtest; forward ledgers (Reddit and Wikipedia, `spike_events.source`) |
 | `strategy.js` | strategy lab: what drives big swings, up or down, rule backtests with costs and a holdout |
 | `stock-kind.js` | company / fund / ambiguous-word ticker flag |
@@ -61,6 +65,10 @@ Locally: `docker`/`npm run db:up`, `npm run dev` (see README). Set `RAVE_COLLECT
 Seed helper for tests: `seedHistory` in `backend/test/helpers.js`; synthetic worlds for the statistics in `backend/test/validation-world.js`.
 
 ## Gotchas
+- A deploy restarts the backend and kills any job mid-run. Jobs resume by themselves (abandoned at boot, partial runs continue after 5 minutes), but a manual run does not. Do not push while a long backfill you started by hand is running.
+- GitHub Actions can queue for a long time; Railway deploys only after CI passes, so a push may take 5 to 30 minutes to go live.
+- The cloud sandbox cannot reach Yahoo, Wikipedia, GDELT and similar. Anything needing them must run on Railway (add a probe in `diagnostics.js`, read it at `/api/rave/diagnostics?candidates=N`).
+- Do not lose research to survivorship: a universe made of today's index members or today's popular stocks flatters anything that rewards winners. Use the membership dates (`universe.added_day`, `removed_day`).
 - Never run `pkill -f` from the tool shell (it kills its own shell); find the pid instead.
 - Run long test commands in the background; the shell has a 280-second command limit.
 - Yahoo can block or throttle: check the Data page. The first backfill for ~820 stocks takes a few runs (it continues every 5 minutes by itself).

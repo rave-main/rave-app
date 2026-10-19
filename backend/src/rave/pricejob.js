@@ -4,6 +4,7 @@ const prices = require('./prices');
 
 const BENCHMARK = 'SPY';
 const RETRY_FAILED_DAYS = 3;
+const RETRY_NOT_FOUND_DAYS = 30; // Yahoo has no data for the symbol (delisted, renamed): ask again rarely
 const SOURCE_DOWN_AFTER = 10; // this many failures in a row means Yahoo itself is failing, not one odd ticker
 
 async function runPrices(pool, { log = console, deadlineMs = 9 * 60 * 1000, pauseMs = 400, fetchImpl = fetch, now = Date.now() } = {}) {
@@ -29,7 +30,7 @@ async function runPrices(pool, { log = console, deadlineMs = 9 * 60 * 1000, paus
     const from = needsFull ? prices.isoDay(now - prices.BACKFILL_DAYS * prices.DAY_MS) : prices.isoDay(Date.parse(`${s.last_day}T00:00:00Z`) - 10 * prices.DAY_MS);
     if (!needsFull && s.last_day >= today) { details.skipped++; continue; }
     // a ticker Yahoo does not know (or rejected) is retried every few days, not on every run
-    if (s?.error && now - new Date(s.checked_at).getTime() < RETRY_FAILED_DAYS * prices.DAY_MS) { details.skipped++; continue; }
+    if (s?.error && now - new Date(s.checked_at).getTime() < (/not found/i.test(s.error) ? RETRY_NOT_FOUND_DAYS : RETRY_FAILED_DAYS) * prices.DAY_MS) { details.skipped++; continue; }
     attempted++;
     try {
       const rows = await prices.fetchPrices(ticker, from, today, opts);
@@ -44,9 +45,12 @@ async function runPrices(pool, { log = console, deadlineMs = 9 * 60 * 1000, paus
       streak = 0;
       if (needsFull) details.fullRefreshes++;
     } catch (err) {
-      const msg = `${ticker}: ${String(err.message).slice(0, 160)}`;
-      details.errors.push(msg);
-      streak++;
+      const notFound = err.status === 404 || /No data found|Not Found/i.test(String(err.message));
+      const msg = `${ticker}: ${notFound ? 'not found: ' : ''}${String(err.message).slice(0, 160)}`;
+      if (notFound) details.notFound = (details.notFound || 0) + 1;
+      else details.errors.push(msg);
+      if (ticker === BENCHMARK) details.benchmarkFailed = true;
+      if (!notFound) streak++; // a symbol Yahoo does not know is an answer, not a sign that Yahoo is down
       await pool.query(
         `INSERT INTO price_sync (ticker, error, checked_at) VALUES ($1, $2, now()) ON CONFLICT (ticker) DO UPDATE SET error = $2, checked_at = now()`,
         [ticker, msg]
@@ -57,8 +61,9 @@ async function runPrices(pool, { log = console, deadlineMs = 9 * 60 * 1000, paus
   }
   details.errorCount = details.errors.length;
   details.errors = details.errors.slice(0, 8);
-  if (streak >= SOURCE_DOWN_AFTER || (attempted >= 3 && details.fetched === 0)) {
-    throw new Error(`Price fetches failing (${details.errorCount} of ${attempted} tickers), e.g. ${details.errors[0]}`);
+  // Yahoo not knowing a few symbols is normal (delisted companies); failing means the benchmark is missing, many requests in a row broke, or nothing at all came back
+  if (streak >= SOURCE_DOWN_AFTER || details.benchmarkFailed || (attempted >= 3 && details.fetched === 0 && details.errorCount + (details.notFound || 0) >= attempted)) {
+    throw new Error(`Price fetches failing (${details.errorCount + (details.notFound || 0)} of ${attempted} tickers), e.g. ${details.errors[0] || 'no data for ' + BENCHMARK}`);
   }
   return details;
 }

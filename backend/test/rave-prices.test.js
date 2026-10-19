@@ -146,11 +146,11 @@ test('one failing ticker is recorded and skipped; mostly failing fails the whole
   await resetRave(pool);
   await universeSeed();
   const some = await run(priceServer({ fail: ['GME'] }), Date.parse('2026-10-19T23:00:00Z'));
-  assert.equal(some.errorCount, 1);
+  assert.equal(some.notFound, 1, 'a symbol Yahoo does not know is counted, not treated as an outage');
+  assert.equal(some.errorCount, 0);
   assert.equal(some.fetched, 2);
-  assert.match(some.errors[0], /^GME: .*No data found/);
   const { rows: [s] } = await pool.query(`SELECT error FROM price_sync WHERE ticker = 'GME'`);
-  assert.match(s.error, /No data found/);
+  assert.match(s.error, /not found: .*No data found/);
 
   await resetRave(pool);
   await universeSeed();
@@ -167,7 +167,10 @@ test('one failing ticker is recorded and skipped; mostly failing fails the whole
   assert.ok(!srv.calls.some((c) => c.symbol === 'GME'), 'GME is not retried the next day');
   srv.calls.length = 0;
   await run(srv, t0 + 4 * 24 * 3600000);
-  assert.ok(srv.calls.some((c) => c.symbol === 'GME'), 'GME is retried after three days');
+  assert.ok(!srv.calls.some((c) => c.symbol === 'GME'), 'a symbol Yahoo does not know waits much longer than three days');
+  srv.calls.length = 0;
+  await run(srv, t0 + 31 * 24 * 3600000);
+  assert.ok(srv.calls.some((c) => c.symbol === 'GME'), 'but it is asked again after a month');
 });
 
 test('a ticker with no history yet is synced before ones that only need a top-up', async () => {

@@ -7,7 +7,7 @@ const { stockKind } = require('./stock-kind');
 const GDELT = 'https://api.gdeltproject.org/api/v2/doc/doc';
 const MIN_GAP_MS = 7000;
 const TOP_STOCKS = 300;
-const HISTORY = '1y'; // GDELT's long timelines are daily; this is what a first pass fetches
+const HISTORY = '6months'; // GDELT's long timelines are daily; this is what a first pass fetches
 const TOP_UP = '1month';
 const TOP_UP_EVERY_HOURS = 20;
 
@@ -39,7 +39,7 @@ async function gdelt(query, mode, timespan, { fetchImpl = fetch, gapMs = MIN_GAP
       return body?.timeline?.[0]?.data || [];
     } catch (err) {
       if (err.fatal) throw err;
-      last = err;
+      last = new Error(`${err.message}${err.cause ? ` (${String(err.cause.code || err.cause.message).slice(0, 50)})` : ''}`);
       await sleep(gapMs * 2 * (attempt + 1)); // a dropped connection: wait longer before trying again
     }
   }

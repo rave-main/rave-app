@@ -11,10 +11,15 @@
 
 ## Storage (500 MB volume)
 - Reddit data for all ~820 stocks: about 220 MB a year.
-- Prices: 2 years for ~820 stocks, about 40 MB. Wikipedia views: a few MB. Raw API pages (7 days): about 26 MB.
+- Prices: 5 years for about 2,500 stocks in the compact `bars` layout, about 40 MB (the earlier row-per-day layout would have needed over 150 MB). Wikipedia views: a few MB. Raw API pages (7 days): about 26 MB.
 - So the volume lasts a little over a year with everything on. The Data page shows usage. If it gets tight: a bigger volume,
   or roll old Reddit readings up to hourly.
 
 ## Adding stocks
 Costs nothing on the Reddit side (every run already downloads the whole leaderboard). Each stock adds about one price request
 and one Wikipedia request per day.
+
+## Update 2026-10-19
+- New free sources: Wikipedia index lists (membership), Yahoo quote-summary (results dates, needs a cookie and crumb), GDELT (news tone, throttled to one request every 5 seconds and sometimes unreachable). None needs a key.
+- Database was 28 MB on 19 Oct after moving prices to the compact layout; with the 5-year backfill for the whole universe it is expected to stay well under 150 MB.
+- Not reachable from the cloud sandbox I develop in (but reachable from Railway): Yahoo, Wikipedia, Wikimedia, GDELT, ApeWisdom. Blocked from both: SEC EDGAR (403), Nasdaq calendar, Stooq. Reddit archive search (Arctic Shift) times out on text queries, so Reddit history cannot be rebuilt that way.

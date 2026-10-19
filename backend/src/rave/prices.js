@@ -24,7 +24,7 @@ async function getText(url, { fetchImpl = fetch, retries = 3, retryDelayMs = 200
         continue;
       }
       const text = await res.text();
-      if (!res.ok) throw Object.assign(new PriceError(`HTTP ${res.status} from ${new URL(url).host}: ${text.slice(0, 100).replace(/\s+/g, ' ')}`), { fatal: true });
+      if (!res.ok) throw Object.assign(new PriceError(`HTTP ${res.status} from ${new URL(url).host}: ${text.slice(0, 100).replace(/\s+/g, ' ')}`), { fatal: true, status: res.status });
       return text;
     } catch (err) {
       if (err.fatal) throw err;

@@ -82,7 +82,10 @@ async function fetchIndex(page, opts = {}) {
   const body = await wiki.getJson(url, opts);
   const html = body?.parse?.text;
   if (typeof html !== 'string') throw new wiki.WikiError(`no table in ${page}`);
-  return { rows: parseIndexTable(html), changes: parseChanges(html) };
+  const changes = parseChanges(html);
+  // when a page yields no changes, keep a short look at the tables that mention both words so the parser can be fixed from the deployed service
+  const debug = changes.length ? null : html.split(/<table\b/i).slice(1).filter((t) => /removed/i.test(t) && /added/i.test(t)).slice(0, 2).map((t) => t.replace(/\s+/g, ' ').slice(0, 700));
+  return { rows: parseIndexTable(html), changes, debug };
 }
 
 // Current members, then the changes that happened since CHANGES_FROM: members join on their added date; companies that left (and are not in
@@ -137,7 +140,8 @@ async function runUniverse(pool, { log = console, fetchImpl = fetch, now = Date.
   const pending = [];
   for (const [name, page] of PAGES) {
     try {
-      const { rows, changes } = await fetchIndex(page, { fetchImpl });
+      const { rows, changes, debug } = await fetchIndex(page, { fetchImpl });
+      if (debug) (details.debug ||= {})[name] = debug;
       if (rows.length < 100) throw new Error(`only ${rows.length} rows found`);
       details.lists[name] = await saveUniverse(pool, name, rows);
       details.total += details.lists[name];
