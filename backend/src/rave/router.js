@@ -68,6 +68,7 @@ function raveRouter(pool) {
       prices: priceRows.map((p) => ({ day: p.day, close: p.close })),
       price: stock.price,
       results: stock.results,
+      bigMove: stock.bigMove,
       spikes,
       wiki: {
         article: m?.article || null, status: m?.status || 'pending', confidence: m?.confidence || 'none', source: m?.source || 'auto', extract: m?.extract || null,

@@ -96,7 +96,8 @@ async function scoredStocks(pool) {
   const { rows: [{ run }] } = await pool.query(
     `SELECT coalesce(max(id)::text, '0') || '|' || coalesce(max(started_at)::text, '') || '|' ||
             (SELECT coalesce(max(id), 0) FROM collection_runs WHERE kind = 'wikipedia' AND status = 'success') || '|' ||
-            (SELECT coalesce(max(id), 0) FROM collection_runs WHERE kind = 'prices' AND status = 'success') AS run
+            (SELECT coalesce(max(id), 0) FROM collection_runs WHERE kind = 'prices' AND status = 'success') || '|' ||
+            (SELECT coalesce(max(id), 0) FROM validation_runs WHERE kind = 'bigmove') AS run
      FROM collection_runs WHERE kind = 'apewisdom' AND status = 'success'`
   );
   if (cache.key === run && cache.value) return cache.value;
@@ -110,6 +111,8 @@ async function scoredStocks(pool) {
   const prices = await loadPrices(pool, mains, { fromDay: new Date(Date.now() - 100 * 86400000).toISOString().slice(0, 10) });
   const { rows: due } = await pool.query(`SELECT ticker, min(day)::text AS day, (min(day) - current_date)::int AS days FROM earnings_dates WHERE ticker = ANY($1) AND day >= current_date GROUP BY ticker`, [mains]);
   const dueOf = new Map(due.map((d) => [d.ticker, { day: d.day, inDays: d.days }]));
+  const { rows: [bm] } = await pool.query(`SELECT results FROM validation_runs WHERE kind = 'bigmove' ORDER BY ran_at DESC LIMIT 1`);
+  const bigMove = bm?.results || null;
   const AT_LEAST_RISING = ['Rising', 'Hot', 'Extreme'];
   const value = stocks.map((r) => {
     const merged = mergeSeries(r.tickers.map((t) => series.get(t)));
@@ -127,6 +130,7 @@ async function scoredStocks(pool) {
       spark: merged.slice(-48).map((p) => p.mentions), // about the last 24 hours
       price: priceSummary(prices.get(r.ticker)),
       results: dueOf.get(r.ticker) || null,
+      bigMove: bigMove && bigMove.scores[r.ticker] !== undefined ? { p: bigMove.scores[r.ticker], base: bigMove.base, asOf: bigMove.asOf, days: bigMove.H, auc: bigMove.auc } : null,
       scores,
       wiki: m ? { article: m.article, status: m.status, confidence: m.confidence, source: m.source, scores: wikiScores, views } : { article: null, status: 'pending', confidence: 'none', source: 'auto', scores: null },
       // both signals agree when Reddit and Wikipedia are each at Rising or above (short horizon)

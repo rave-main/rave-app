@@ -297,6 +297,15 @@ function Lab2({ lab }) {
         <thead><tr><th>Inputs</th><th className="num" title="0.5 means no better than chance, 1 means perfect">Score (0.5 = chance)</th><th className="num" title="How many times more often a big shift happens among the tenth of stocks the model rates most likely">Big shifts in its top tenth</th><th className="num">Weeks tested</th></tr></thead>
         <tbody>{e.models.map((m) => <tr key={m.id}><td>{m.label}</td><td className="num">{fx(m.stage1.auc)}</td><td className="num">{m.stage1.lift ? `${m.stage1.lift.toFixed(2)}× as often` : '—'}</td><td className="num">{m.stage1.n.toLocaleString('en-US')}</td></tr>)}</tbody>
       </table></div>
+      {e.calibration?.length > 0 && (
+        <Explain title="Is the chance of a big shift honest? (calibration)">
+          <div className="table-wrap"><table className="runs">
+            <thead><tr><th>Group of weeks and stocks (lowest to highest predicted chance)</th><th className="num">Predicted chance</th><th className="num">Big shift actually happened</th><th className="num">Test rows</th></tr></thead>
+            <tbody>{e.calibration.map((c, i) => <tr key={i}><td>{i + 1} of {e.calibration.length}</td><td className="num">{pcs(c.predicted, 0).replace('+', '')}</td><td className="num">{pcs(c.actual, 0).replace('+', '')}</td><td className="num">{c.n.toLocaleString('en-US')}</td></tr>)}</tbody>
+          </table></div>
+          <p>Test rows are sorted by the model's predicted chance of a big shift and cut into ten equal groups. If the two percentages are close, the number shown on each stock page can be read as a real probability. These are walk-forward test rows only, never used for training.</p>
+        </Explain>
+      )}
       <h3>Step 2: when there is a big shift, can the direction be called?</h3>
       <div className="table-wrap"><table className="runs">
         <thead><tr><th>Inputs</th><th className="num">Big shifts</th><th className="num">Went up</th><th className="num" title="0.5 means no better than a coin toss">Score (0.5 = chance)</th><th className="num" title="Average of the quarterly scores, so one market mood cannot flatter it">Typical quarter</th></tr></thead>

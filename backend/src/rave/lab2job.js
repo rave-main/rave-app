@@ -1,7 +1,9 @@
 // Loads the research universe from the database in the shape the long-horizon lab (lab2.js) wants, runs it and stores the result.
 const { loadBars, dayNum } = require('./prices');
 const { loadNews } = require('./news');
-const { runLab2 } = require('./lab2');
+const { runLab2, fitBigMove, scoreBigMove, stockRows, prepareSpy } = require('./lab2');
+
+const BIG_MOVE_H = 20; // sessions
 
 // Wikipedia views as one dense 32-bit array per article (day number of the first value, then one value per calendar day; NaN where missing).
 // The generic loader makes an object per day, which for 1,500 stocks over six years is several hundred megabytes.
@@ -63,11 +65,38 @@ async function runLab2Job(pool, { log = console, B = 300, horizons = [20, 60] } 
     await pool.query(`INSERT INTO validation_runs (kind, params, results) VALUES ('lab2', '{}', $1)`, [JSON.stringify({ status: 'insufficient', reason, coverage })]);
     return { status: 'insufficient', reason };
   }
-  const result = await runLab2({ stocks, spy, horizons, B });
+  const result = await runLab2({ stocks, spy, horizons, B }, { keepPanel: true });
+  const panel = result.panel;
+  delete result.panel;
   result.coverage = coverage;
   result.seconds = Math.round((Date.now() - started) / 1000);
   await pool.query(`INSERT INTO validation_runs (kind, params, results) VALUES ('lab2', $1, $2)`, [JSON.stringify({ horizons, B }), JSON.stringify(result)]);
+  if (panel && result.status === 'ok') await runBigMove(pool, panel, spy, result.horizons[BIG_MOVE_H], stocks);
   return { status: result.status, stocks: stocks.length, observations: result.observations, seconds: result.seconds, memoryMb: Math.round(process.memoryUsage().rss / 1e6) };
 }
 
-module.exports = { loadLab2Data, runLab2Job };
+// Today's chance that a stock makes a big move (at least 2 times its own typical move over the next 20 sessions, up or down), for every
+// stock in the universe and every recently mentioned Reddit stock. Stored with the calibration table so the numbers can be checked.
+async function runBigMove(pool, panel, spyBars, entry, universeStocks) {
+  const fit = fitBigMove(panel, BIG_MOVE_H);
+  const spy = prepareSpy(spyBars);
+  const scores = {};
+  const asOf = new Date(spyBars.days[spyBars.days.length - 1] * 86400000).toISOString().slice(0, 10);
+  const score = (stock) => {
+    const rows = stockRows(stock, spy, { horizons: [], last: true });
+    if (rows.length) scores[stock.ticker] = Math.round(scoreBigMove(fit, rows[0]) * 1000) / 1000;
+  };
+  for (const st of universeStocks) if (st.removedDay == null) score(st);
+  const { rows: reddit } = await pool.query(`SELECT ticker FROM tickers WHERE last_seen >= now() - interval '14 days'`);
+  const todo = reddit.map((r) => r.ticker).filter((t) => !(t in scores));
+  for (let i = 0; i < todo.length; i += 100) {
+    const bars = await loadBars(pool, todo.slice(i, i + 100));
+    for (const [ticker, b] of bars) if (b.days.length >= MIN_SESSIONS) score({ ticker, bars: b, addedDay: null, removedDay: null, views: null, news: null });
+    await new Promise((r) => setImmediate(r));
+  }
+  const results = { asOf, H: BIG_MOVE_H, base: fit.base, trainRows: fit.n, auc: entry?.models?.[0]?.stage1?.auc ?? null, calibration: entry?.calibration || [], scores };
+  await pool.query(`INSERT INTO validation_runs (kind, params, results) VALUES ('bigmove', $1, $2)`, [JSON.stringify({ H: BIG_MOVE_H }), JSON.stringify(results)]);
+  return Object.keys(scores).length;
+}
+
+module.exports = { loadLab2Data, runLab2Job, runBigMove };

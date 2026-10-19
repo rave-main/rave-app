@@ -136,6 +136,13 @@ test('the lab job loads the universe from the database (members, leavers, prices
     const { agent } = await signedInAgent(app);
     const { body } = await agent.get('/api/rave/research').expect(200);
     assert.equal(body.lab2.status, 'ok');
+    assert.ok(body.lab2.horizons[20].calibration.length >= 5);
+    // today's chance of a big move is stored for the active members and shown on the stock list
+    const { rows: [bm] } = await pool.query(`SELECT results FROM validation_runs WHERE kind = 'bigmove'`);
+    const keys = Object.keys(bm.results.scores);
+    assert.ok(keys.length >= 100 && !keys.includes('GHOST'));
+    assert.ok(Object.values(bm.results.scores).every((p) => p > 0 && p < 1));
+    assert.ok(bm.results.base > 0.05 && bm.results.base < 0.6);
   } finally {
     await pool.end();
   }

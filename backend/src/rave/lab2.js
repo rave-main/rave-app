@@ -160,7 +160,7 @@ function earningsFlags(v) {
 }
 
 // One weekly row per stock per week (its last trading day), only while the stock was a member of the universe
-function stockRows(stock, spy, { horizons = [20, 60], from = 250 } = {}) {
+function stockRows(stock, spy, { horizons = [20, 60], from = 250, last = false } = {}) {
   const { days, open, close, volume } = stock.bars;
   const n = days.length;
   if (n < from + 100) return [];
@@ -172,12 +172,13 @@ function stockRows(stock, spy, { horizons = [20, 60], from = 250 } = {}) {
   { let j = 0, prev = -1; for (let i = 0; i < n; i++) { while (j < earn.length && earn[j] <= i) { prev = earn[j]; j++; } earnIdx[i] = prev; } }
   const spyIndex = spy.index;
   const rows = [];
-  for (let i = from; i < n - 1; i++) {
+  // `last`: only today's row (no outcome yet), for scoring the stock as it is now
+  for (let i = last ? n - 1 : from; i < (last ? n : n - 1); i++) {
     const week = weekOf(days[i]);
-    if (i + 1 < n && weekOf(days[i + 1]) === week) continue; // only the last trading day of the week
+    if (!last && i + 1 < n && weekOf(days[i + 1]) === week) continue; // only the last trading day of the week
     const day = days[i];
-    if (stock.addedDay != null && day < stock.addedDay) continue;
-    if (stock.removedDay != null && day > stock.removedDay) continue;
+    if (!last && stock.addedDay != null && day < stock.addedDay) continue;
+    if (!last && stock.removedDay != null && day > stock.removedDay) continue;
     const f = { ticker: stock.ticker, week, day };
     f.vol20 = std(i, 20); f.vol60 = std(i, 60); f.vol120 = std(i, 120); f.vr = f.vol20 / f.vol120;
     for (const k of [5, 20, 60, 120]) f[`ret${k}`] = close[i] / close[i - k] - 1;
@@ -238,14 +239,17 @@ function stockRows(stock, spy, { horizons = [20, 60], from = 250 } = {}) {
 }
 
 // ---------- panel ----------
-function buildPanel(stocks, spyBars, opts = {}) {
+function prepareSpy(spyBars) {
   const n = spyBars.days.length;
   const spyClose = Float64Array.from(spyBars.close), spyOpen = Float64Array.from(spyBars.open);
   const spyRet = new Float64Array(n).fill(NaN);
   for (let i = 1; i < n; i++) spyRet[i] = spyClose[i] / spyClose[i - 1] - 1;
   const vol20 = new Float64Array(n).fill(NaN);
   for (let i = 20; i < n; i++) { let s = 0, ss = 0; for (let k = i - 19; k <= i; k++) { s += spyRet[k]; ss += spyRet[k] ** 2; } const m = s / 20; vol20[i] = Math.sqrt(Math.max(0, ss / 20 - m * m) * (20 / 19)); }
-  const spy = { close: spyClose, open: spyOpen, vol20, index: new Map(Array.from(spyBars.days, (d, i) => [d, i])) };
+  return { close: spyClose, open: spyOpen, vol20, index: new Map(Array.from(spyBars.days, (d, i) => [d, i])) };
+}
+function buildPanel(stocks, spyBars, opts = {}) {
+  const spy = prepareSpy(spyBars);
   const rows = [];
   for (const s of stocks) rows.push(...stockRows(s, spy, opts));
   return rows;
@@ -376,6 +380,16 @@ const stage1Report = (res) => {
   const top = res.filter((r) => r.pb >= cut);
   return { n: res.length, base, auc: auc(y, s), lift: top.length ? mean(top.map((r) => r.big)) / base : null };
 };
+// Reliability of the big-shift probability: ten equal groups of test rows by predicted chance, with the share that really had a big shift
+function calibration(res) {
+  const order = Array.from({ length: res.length }, (_, i) => i).sort((a, b) => res[a].pb - res[b].pb);
+  const groups = [];
+  for (let g = 0; g < 10; g++) {
+    const part = order.slice(Math.floor((g * order.length) / 10), Math.floor(((g + 1) * order.length) / 10));
+    if (part.length) groups.push({ predicted: mean(part.map((i) => res[i].pb)), actual: mean(part.map((i) => res[i].big)), n: part.length });
+  }
+  return groups;
+}
 const stage2Report = (res) => {
   const big = res.filter((r) => r.big === 1);
   const byQuarter = new Map();
@@ -387,7 +401,7 @@ const stage2Report = (res) => {
 // ---------- the lab ----------
 // stocks: [{ ticker, addedDay, removedDay (day numbers or null), bars: { days, open, close, volume }, views: { start (day number), values } | null, news: { tone: Map, vol: Map } | null }]
 // spyBars: { days, open, close }. All days are day numbers since 1970-01-01.
-async function runLab2({ stocks, spy, horizons = [20, 60], startWeek, B = 400, sets } = {}) {
+async function runLab2({ stocks, spy, horizons = [20, 60], startWeek, B = 400, sets } = {}, opts = {}) {
   const rows = await buildPanelAsync(stocks, spy, { horizons });
   if (rows.n < 5000) return { status: 'insufficient', reason: `only ${rows.n} weekly observations` };
   const weeksSorted = [...new Set(rows.col('week'))].sort((a, b) => a - b);
@@ -397,13 +411,14 @@ async function runLab2({ stocks, spy, horizons = [20, 60], startWeek, B = 400, s
     { id: 'earn', label: '+ results-day estimate', big: [...FEATURES.price, ...FEATURES.earn], dir: DIRECTION.filter((c) => FEATURES.price.includes(c) || c === 'earn_react') },
     { id: 'wiki', label: '+ Wikipedia attention', big: [...FEATURES.price, ...FEATURES.earn, ...FEATURES.wiki], dir: DIRECTION.filter((c) => !c.startsWith('n')) },
   ];
-  const out = { status: 'ok', generatedAt: new Date().toISOString(), observations: rows.n, stocks: rows.tickers.size, firstTestWeek: first, horizons: {} };
+  const out = { status: 'ok', panel: opts.keepPanel ? rows : undefined, generatedAt: new Date().toISOString(), observations: rows.n, stocks: rows.tickers.size, firstTestWeek: first, horizons: {} };
   for (const H of horizons) {
     const entry = { H, models: [], baselines: [] };
     for (const cfg of configs) {
       await new Promise((r) => setImmediate(r)); // let the server answer requests between the heavy steps
       const res = walkForward(rows, H, cfg.big, cfg.dir, { startWeek: first });
       if (!res.length) continue;
+      if (cfg === configs[0]) entry.calibration = calibration(res);
       entry.models.push({ id: cfg.id, label: cfg.label, stage1: stage1Report(res), stage2: stage2Report(res), all: evaluate(res, (r) => r.score, H, { B }), directionOnly: evaluate(res, (r) => r.pu - 0.5, H, { B }) });
       if (cfg === configs[0]) entry.res = res;
     }
@@ -429,4 +444,23 @@ async function runLab2({ stocks, spy, horizons = [20, 60], startWeek, B = 400, s
   return out;
 }
 
-module.exports = { runLab2, buildPanel, buildPanelAsync, stockRows, walkForward, portfolio, evaluate, fitLogistic, predictLogistic, auc, earningsFlags, weekOf, FEATURES, DIRECTION, COST };
+// ---------- today's chance of a big move ----------
+// Fits the stage 1 model (price and volume features only) on every labelled row and scores stocks as they are today. H is in sessions.
+function fitBigMove(panel, H, { cols = FEATURES.price, maxTrain = 80000, C = 0.3 } = {}) {
+  const R = panel.col(`R${H}`), z = panel.col(`z${H}`);
+  const idx = [];
+  for (let i = 0; i < panel.n; i++) if (Number.isFinite(R[i]) && Number.isFinite(z[i])) idx.push(i);
+  if (idx.length > maxTrain) { const stride = idx.length / maxTrain; const keep = []; for (let q = 0; q < maxTrain; q++) keep.push(idx[Math.floor(q * stride)]); idx.length = 0; for (const k of keep) idx.push(k); }
+  const columns = cols.map((c) => panel.col(c));
+  const scaler = makeScaler(columns.map((c) => idx.map((i) => c[i])));
+  const y = Float64Array.from(idx, (i) => (Math.abs(z[i]) >= BIG ? 1 : 0));
+  const model = fitLogistic(applyScaler(scaler, columns, idx), y, { C });
+  let base = 0; for (const v of y) base += v;
+  return { cols, scaler, model, base: base / y.length, n: idx.length };
+}
+function scoreBigMove(fit, row) {
+  const columns = fit.cols.map((c) => [row[c] === undefined ? NaN : row[c]]);
+  return predictLogistic(fit.model, applyScaler(fit.scaler, columns, [0]))[0];
+}
+
+module.exports = { prepareSpy, fitBigMove, scoreBigMove, runLab2, buildPanel, buildPanelAsync, stockRows, walkForward, portfolio, evaluate, fitLogistic, predictLogistic, auc, earningsFlags, weekOf, FEATURES, DIRECTION, COST };
