@@ -14,9 +14,12 @@ const AUDIT_SQL = `
       SELECT 1 FROM collection_runs c2 WHERE c2.kind = 'apewisdom' AND c2.status = 'success' AND c2.started_at > r.started_at
         AND (c2.started_at AT TIME ZONE 'UTC')::date = r.day
         AND floor((extract(hour FROM c2.started_at AT TIME ZONE 'UTC') * 60 + extract(minute FROM c2.started_at AT TIME ZONE 'UTC')) / 30)::int = r.slot)
-  ), raw_rows AS (
-    SELECT rs.run_id, rs.page, upper(trim(e->>'ticker')) AS ticker, (e->>'mentions')::int AS mentions, (e->>'rank')::int AS rank
-    FROM raw_snapshots rs JOIN runs r ON r.id = rs.run_id, jsonb_array_elements(rs.payload->'results') e
+  ), raw_all AS (
+    SELECT rs.run_id, rs.page, x.ord, upper(trim(x.e->>'ticker')) AS ticker, (x.e->>'mentions')::int AS mentions, (x.e->>'rank')::int AS rank
+    FROM raw_snapshots rs JOIN runs r ON r.id = rs.run_id, jsonb_array_elements(rs.payload->'results') WITH ORDINALITY AS x(e, ord)
+  ), raw_rows AS (  -- the collector keeps the first of a ticker listed twice (on two pages), so the audit does too
+    SELECT run_id, page, ticker, mentions, rank FROM (
+      SELECT *, row_number() OVER (PARTITION BY run_id, ticker ORDER BY page, ord) AS n FROM raw_all) d WHERE n = 1
   ), raw_sum AS (
     SELECT run_id, count(DISTINCT page) AS pages, count(DISTINCT ticker) AS tickers, sum(mentions) AS mentions FROM raw_rows GROUP BY run_id
   ), stored AS (  -- every stored value at the run's slot

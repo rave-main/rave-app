@@ -121,3 +121,11 @@ Question: can attention spikes be turned into money? Fixed procedure, written do
   versus 2026), not to an edge. Cross-sectional ranking on attention, and 82 combinations of simple signals, gave nothing beyond chance. Earnings
   days are a major cause of big swings (28.8% of five-day windows containing an earnings-like volume surge had a big swing, against 8.6%), but Yahoo earnings dates
   are not reachable from the sandbox, so they are approximated from volume surges in the exploration and not yet used in the lab.
+
+## Long-horizon lab and the chance of a big move (`lab2.js`, `lab2job.js`)
+- Rows: one per stock per week, only while the stock was an index member (`universe.added_day/removed_day`), features known on that day (volatility, returns, momentum, 52-week position, volume surge, market context; optionally results-day estimate and Wikipedia attention).
+- Label: market-adjusted return over 20 or 60 sessions (entry next open, minus SPY); a big shift is |return / (vol60 x sqrt(H))| >= 2.
+- Stage 1: ridge logistic regression, big shift or not. Stage 2: logistic, up or down, trained only on past big shifts. Walk-forward by quarter with an embargo of 1.5 x the horizon. AUC, lift at the top decile and a ten-group calibration table are reported; portfolios (long/short deciles, costs 0.32% per leg plus 5% a year borrow) with a block-bootstrap range and baselines (momentum, calm minus jumpy, random).
+- Chance of a big move: the stage 1 model (price and volume features only) fitted on all labelled rows and scored on each stock's latest row; stored as `validation_runs.kind='bigmove'` and shown on the stock page with the model's AUC. It says nothing about direction.
+- Results to date: big shifts can be spotted (AUC about 0.63, lift about 1.8 to 2.0) mostly from volatility; Wikipedia attention and results-day estimates add almost nothing; direction AUC fell from 0.76 to 0.68 (12 weeks) and 0.53 (4 weeks) as more leavers were added, i.e. survivorship was behind most of it; no portfolio is reliably profitable.
+- Memory: panel rows are stored as 32-bit columns and Wikipedia views as dense arrays so the job fits the free tier (about 490 MB).

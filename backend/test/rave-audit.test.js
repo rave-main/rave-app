@@ -118,3 +118,14 @@ test('runs from before the storage migration are skipped with an explanation, bu
   assert.match(audit.note, /1 early run\(s\) were stored in an earlier layout/);
   assert.equal(audit.cadence.gapsOver45Min, 1, 'but its absence from the cadence is visible');
 });
+
+test('a ticker listed on two pages is checked against the first listing, as the collector stores it', async () => {
+  await resetRave(pool);
+  const lb = leaderboard();
+  const dup = { rank: 120, ticker: 'GME', name: 'GameStop', mentions: '7', upvotes: 1 };
+  lb.rawPages[1].payload.results.push(dup);
+  const at = new Date(Math.floor((Date.now() - 10 * 60000) / (30 * 60000)) * 30 * 60000 + 2 * 60000);
+  assert.equal((await runCollection(pool, { fetchLeaderboard: async () => lb, at })).status, 'success');
+  const audit = await auditRuns(pool);
+  assert.deepEqual(failing(audit), []);
+});

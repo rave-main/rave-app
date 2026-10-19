@@ -10,6 +10,12 @@ money historically. Decided: alerts stay in the backlog; Yahoo stays the only pr
 ## STATUS (2026-10-18)
 Part 1 is done (two filters, rating + measure + change cells, fund and word-ticker flags, stars, top 10, market context, Wikipedia match counts). Part 2 stages A to C were done with the strategy lab (see METHODOLOGY.md): no robust profitable rule was found. Still open from Part 2: real earnings dates (fetch from Railway, Yahoo is blocked from the sandbox), Reddit-based tests once there is history, the forward ledgers (running), and a pristine holdout from new data.
 
+## STATUS (2026-10-19, later)
+Done: point-in-time S&P 1500 universe (S&P 500 leavers missing: Wikipedia no longer lists them), 5-year prices, lab2 on production (79 s, about 490 MB),
+typical 20-day swing, "ran" flag and size idea, chance of a big move per stock with a calibration table, audit duplicate-ticker fix.
+Open: (1) Reddit features in lab2 once weeks of history exist; (2) a better free news source than GDELT, or drop it; (3) S&P 500 leavers and prices for the 260
+leavers Yahoo does not have (survivorship remains); (4) forward ledgers are the unbiased judge; (5) alerts stay in the backlog.
+
 ## Part 1: Radar and product fixes (do first)
 1. **Two label filters.** Replace the single "Any label" dropdown with "Reddit: ..." and "Wikipedia: ..." dropdowns (Rising / Hot /
    Extreme / Quiet / Low volume / Warming up), each showing a count, kept in the URL. In `Radar.jsx` filter on
