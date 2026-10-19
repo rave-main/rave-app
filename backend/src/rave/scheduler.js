@@ -73,7 +73,7 @@ async function isDue(pool, job, now = new Date()) {
 }
 
 // Runs a job that does not record itself (everything except ApeWisdom): one row in collection_runs per attempt
-async function runRecorded(pool, job, { log = console } = {}) {
+async function runRecorded(pool, job, { log = console, force = false } = {}) {
   const lock = await pool.connect();
   try {
     const { rows: [{ locked }] } = await lock.query("SELECT pg_try_advisory_lock(hashtext('rave-job:' || $1)) AS locked", [job.kind]);
@@ -85,7 +85,7 @@ async function runRecorded(pool, job, { log = console } = {}) {
     );
     const { rows: [run] } = await pool.query(`INSERT INTO collection_runs (kind, status) VALUES ($1, 'running') RETURNING id`, [job.kind]);
     try {
-      const details = (await job.run(pool, { log })) || {};
+      const details = (await job.run(pool, { log, force })) || {};
       await pool.query(`UPDATE collection_runs SET status = 'success', finished_at = now(), details = $2 WHERE id = $1`, [run.id, JSON.stringify(details)]);
       return { status: 'success', runId: run.id, details };
     } catch (err) {

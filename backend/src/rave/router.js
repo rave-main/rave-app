@@ -134,7 +134,7 @@ function raveRouter(pool) {
   router.post('/jobs/:kind/run', wrap(async (req, res) => {
     const job = jobs.find((j) => j.kind === req.params.kind);
     if (!job) return res.status(404).json({ error: 'Unknown job' });
-    (job.selfRecording ? job.run(pool) : runRecorded(pool, job)).then((r) => console.log(`RAVE ${job.kind} (manual): ${JSON.stringify(r).slice(0, 300)}`)).catch((e) => console.error(`RAVE ${job.kind} (manual) crashed:`, e));
+    (job.selfRecording ? job.run(pool) : runRecorded(pool, job, { force: req.query.force === '1' })).then((r) => console.log(`RAVE ${job.kind} (manual): ${JSON.stringify(r).slice(0, 300)}`)).catch((e) => console.error(`RAVE ${job.kind} (manual) crashed:`, e));
     res.status(202).json({ started: job.kind, note: 'running in the background; watch /api/rave/sources' });
   }));
 
