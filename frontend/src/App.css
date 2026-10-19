@@ -238,3 +238,5 @@ h3 { font-size: 1rem; margin: 20px 0 8px; }
 .table-wrap table.runs td:first-child { max-width: 300px; white-space: normal; }
 .results { color: var(--warn); }
 tr.baseline td { color: var(--muted); font-style: italic; }
+
+.ran { color: var(--warn); }

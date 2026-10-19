@@ -33,6 +33,7 @@ const sortValue = {
   wiki: (r, h) => ORDER[r.wiki?.scores?.[h]?.label] ?? -1,
   price: (r) => r.price?.close ?? -1,
   week: (r) => r.price?.change1w ?? -Infinity,
+  swing: (r) => r.price?.swing20 ?? -Infinity,
 };
 
 const change = (now, before) => {
@@ -250,6 +251,7 @@ export default function Radar() {
                 {th('ratio', 'Times normal', 'num hide-sm', "Reddit attention compared with this stock's own usual level (1× = normal)")}
                 {th('price', 'Price (US$)', 'num', 'Latest closing price in US dollars')}
                 {th('week', '5-day change', 'num hide-sm', 'Change in the share price over the last 5 trading days')}
+                {th('swing', 'Typical 20-day swing', 'num hide-sm', 'How far this price typically moves up or down over 20 trading days (one standard deviation, from the last 60 trading days). A risk measure, not a prediction of direction')}
                 {th('rank', 'Reddit rank', 'num hide-sm', 'Position on the Reddit leaderboard (1 = most mentioned)')}
                 <th className="hide-sm" title="Mentions through the last 24 hours">Last 24 hours</th>
               </tr>
@@ -266,13 +268,14 @@ export default function Radar() {
                     <td><WikiCell r={r} horizon={horizon} /></td>
                     <td className="num hide-sm" title={s.explanation}>{s.label === 'Low volume' ? <span className="muted" title="Too few mentions to rate">—</span> : m ? <>{times(m.ratio)}</> : <span className="muted">warming up</span>}</td>
                     <td className="num">{r.price ? usd(r.price.close) : <span className="muted">—</span>}</td>
-                    <td className={`num hide-sm ${chg > 0 ? 'up' : chg < 0 ? 'down' : ''}`}>{r.price ? signedPct(chg) : <span className="muted">—</span>}</td>
+                    <td className={`num hide-sm ${chg > 0 ? 'up' : chg < 0 ? 'down' : ''}`}>{r.price ? <>{signedPct(chg)}{r.price.ran && <small className="ran" title="The price already moved far more than usual over 5 days, so much of any move may be over"> ran</small>}</> : <span className="muted">—</span>}</td>
+                    <td className="num hide-sm" title="Typical size of a 20-trading-day price move (up or down) for this stock, from the last 60 trading days">{r.price?.swing20 != null ? `±${(r.price.swing20 * 100).toFixed(0)}%` : <span className="muted">—</span>}</td>
                     <td className="num hide-sm">{r.ranked ? <>#{r.rank} <RankMove now={r.rank} before={r.rank24hAgo} /></> : <span className="muted">—</span>}</td>
                     <td className="hide-sm"><Sparkline values={r.spark} /></td>
                   </tr>
                 );
               })}
-              {!rows.length && <tr><td colSpan="8" className="muted center">No stocks match these filters.</td></tr>}
+              {!rows.length && <tr><td colSpan="9" className="muted center">No stocks match these filters.</td></tr>}
             </tbody>
           </table>
         </div>

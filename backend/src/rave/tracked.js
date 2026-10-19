@@ -67,12 +67,26 @@ function mergeSeries(seriesList) {
   });
 }
 
-// Latest closing price in US dollars and the change over 1 and 5 trading days
+// Latest closing price in US dollars, the change over 1, 5 and 20 trading days, and how jumpy the stock has been: the typical size
+// of a 20-trading-day move (one standard deviation of daily moves over the last 60 sessions, scaled up). "ran" is set when the last
+// 5 days already moved by more than 1.5 times what is normal for 5 days, i.e. the move may be over before you read about it.
 function priceSummary(rows) {
   if (!rows || !rows.length) return null;
   const last = rows[rows.length - 1];
   const back = (n) => (rows.length > n ? last.close / rows[rows.length - 1 - n].close - 1 : null);
-  return { close: last.close, day: last.day, change1d: back(1), change1w: back(5) };
+  const rets = [];
+  for (let i = Math.max(1, rows.length - 60); i < rows.length; i++) if (rows[i - 1].close > 0 && rows[i].close > 0) rets.push(Math.log(rows[i].close / rows[i - 1].close));
+  let vol = null;
+  if (rets.length >= 30) {
+    const mean = rets.reduce((a, b) => a + b, 0) / rets.length;
+    vol = Math.sqrt(rets.reduce((a, b) => a + (b - mean) ** 2, 0) / (rets.length - 1));
+  }
+  const change1w = back(5);
+  return {
+    close: last.close, day: last.day, change1d: back(1), change1w, change1m: back(20),
+    swing20: vol === null ? null : vol * Math.sqrt(20),
+    ran: vol !== null && change1w !== null && Math.abs(change1w) > 1.5 * vol * Math.sqrt(5),
+  };
 }
 
 let cache = { key: null, value: null };
@@ -93,7 +107,7 @@ async function scoredStocks(pool) {
   const { rows: mapped } = await pool.query('SELECT ticker, article, status, confidence, source FROM wiki_pages WHERE ticker = ANY($1)', [mains]);
   const wikiOf = new Map(mapped.map((m) => [m.ticker, m]));
   const wseries = await loadWikiSeries(pool, [...new Set(mapped.filter((m) => m.article).map((m) => m.article))]);
-  const prices = await loadPrices(pool, mains, { fromDay: new Date(Date.now() - 14 * 86400000).toISOString().slice(0, 10) });
+  const prices = await loadPrices(pool, mains, { fromDay: new Date(Date.now() - 100 * 86400000).toISOString().slice(0, 10) });
   const { rows: due } = await pool.query(`SELECT ticker, min(day)::text AS day, (min(day) - current_date)::int AS days FROM earnings_dates WHERE ticker = ANY($1) AND day >= current_date GROUP BY ticker`, [mains]);
   const dueOf = new Map(due.map((d) => [d.ticker, { day: d.day, inDays: d.days }]));
   const AT_LEAST_RISING = ['Rising', 'Hot', 'Extreme'];

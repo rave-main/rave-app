@@ -140,3 +140,14 @@ test('the lab job loads the universe from the database (members, leavers, prices
     await pool.end();
   }
 });
+
+test('price summary gives the typical 20-day swing and flags a stock that already ran', () => {
+  const { priceSummary } = require('../src/rave/tracked');
+  const calm = Array.from({ length: 70 }, (_, i) => ({ day: `d${i}`, close: 100 * (1 + (i % 2 ? 0.01 : -0.01)) }));
+  const a = priceSummary(calm);
+  assert.ok(a.swing20 > 0.05 && a.swing20 < 0.12);
+  assert.equal(a.ran, false);
+  const ran = [...calm.slice(0, 65), ...[1.05, 1.1, 1.15, 1.2, 1.25].map((m, i) => ({ day: `r${i}`, close: 100 * m }))];
+  assert.equal(priceSummary(ran).ran, true);
+  assert.equal(priceSummary(calm.slice(0, 10)).swing20, null);
+});
