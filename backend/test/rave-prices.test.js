@@ -76,7 +76,10 @@ test('savePrices upserts: re-saving corrects values without duplicating rows', a
   const got = (await prices.loadPrices(pool, ['GME', 'XXX'])).get('GME');
   assert.equal(got.length, 2);
   assert.equal(got[0].close, 2.5);
-  assert.equal(got[0].high, 3);
+  assert.equal(got[1].volume, 5);
+  const bars = (await prices.loadBars(pool, ['GME'])).get('GME');
+  assert.deepEqual([...bars.close], [2.5, 3]);
+  assert.equal(prices.dayIso(bars.days[1]), '2026-10-13');
   assert.equal((await prices.loadPrices(pool, ['XXX'])).get('XXX').length, 0);
 });
 
@@ -102,7 +105,7 @@ function priceServer({ fail = [], dead = false } = {}) {
 const universeSeed = () => seedHistory(pool, { TSLA: simulateCounts({ days: 2, level: 30, seed: 1 }), GME: simulateCounts({ days: 2, level: 30, seed: 2 }) });
 const run = (srv, now) => runPrices(pool, { fetchImpl: srv.fetchImpl, pauseMs: 0, log: quiet, now });
 
-test('the price job backfills 2 years for the whole universe (benchmark first), then only tops up', async () => {
+test('the price job backfills 5 years for the whole universe (benchmark first), then only tops up', async () => {
   await resetRave(pool);
   await universeSeed();
   const srv = priceServer();
@@ -112,9 +115,9 @@ test('the price job backfills 2 years for the whole universe (benchmark first), 
   assert.equal(first.fetched, 3);
   assert.equal(first.fullRefreshes, 3);
   assert.equal(srv.calls[0].symbol, 'SPY', 'the benchmark goes first');
-  assert.ok(srv.calls[0].from <= '2024-10-21' && srv.calls[0].from >= '2024-10-15', `backfill starts ${srv.calls[0].from}`);
-  assert.ok(first.rowsAdded > 3 * 480, `${first.rowsAdded} rows`);
-  assert.equal((await pool.query(`SELECT count(DISTINCT ticker)::int AS n FROM prices`)).rows[0].n, 3);
+  assert.ok(srv.calls[0].from <= '2021-10-21' && srv.calls[0].from >= '2021-10-15', `backfill starts ${srv.calls[0].from}`);
+  assert.ok(first.rowsAdded > 3 * 1200, `${first.rowsAdded} rows`);
+  assert.equal((await pool.query(`SELECT count(*)::int AS n FROM bars`)).rows[0].n, 3);
 
   const calls1 = srv.calls.length;
   const same = await run(srv, t0 + 30 * 60000); // 23:30 the same day

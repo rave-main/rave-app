@@ -3,7 +3,7 @@
 const BROWSER_UA = 'Mozilla/5.0 (compatible; RAVE-research/1.0; +https://github.com/rave-main/rave-app)';
 const YAHOO = 'https://query1.finance.yahoo.com/v8/finance/chart';
 const DAY_MS = 86400000;
-const BACKFILL_DAYS = 2 * 365; // two years of prices for every stock keeps the database small
+const BACKFILL_DAYS = 5 * 365; // five years, stored compactly (see savePrices)
 const FULL_REFRESH_DAYS = 7; // splits rewrite history, so the whole series is re-fetched weekly (daily runs only top up)
 
 class PriceError extends Error {}
@@ -72,28 +72,61 @@ async function fetchPrices(ticker, fromDay, toDay, opts = {}) {
 }
 
 // ---------- storage ----------
-async function savePrices(pool, ticker, rows, source = 'yahoo') {
+// One row per ticker with parallel arrays (day numbers since 1970, open, close, volume): about 15 KB for five years, so thousands
+// of stocks cost tens of megabytes. High and low are not kept (nothing uses them).
+const dayNum = (iso) => Math.round(Date.parse(`${iso}T00:00:00Z`) / DAY_MS);
+const dayIso = (n) => new Date(n * DAY_MS).toISOString().slice(0, 10);
+
+async function savePrices(pool, ticker, rows) {
   if (!rows.length) return 0;
-  await pool.query(
-    `INSERT INTO prices (ticker, day, open, high, low, close, adj_close, volume, source)
-     SELECT $1, d, o, h, l, c, a, v, $9
-     FROM unnest($2::date[], $3::float8[], $4::float8[], $5::float8[], $6::float8[], $7::float8[], $8::float8[]) AS x(d, o, h, l, c, a, v)
-     ON CONFLICT (ticker, day) DO UPDATE SET open = EXCLUDED.open, high = EXCLUDED.high, low = EXCLUDED.low, close = EXCLUDED.close,
-       adj_close = EXCLUDED.adj_close, volume = EXCLUDED.volume, source = EXCLUDED.source`,
-    [ticker, rows.map((r) => r.day), rows.map((r) => r.open), rows.map((r) => r.high), rows.map((r) => r.low), rows.map((r) => r.close),
-      rows.map((r) => r.adjClose), rows.map((r) => r.volume), source]
-  );
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows: [cur] } = await client.query('SELECT days, open, close, volume FROM bars WHERE ticker = $1 FOR UPDATE', [ticker]);
+    const merged = new Map();
+    if (cur) cur.days.forEach((d, i) => merged.set(d, [cur.open[i], cur.close[i], cur.volume[i]]));
+    for (const r of rows) merged.set(dayNum(r.day), [r.open, r.close, r.volume]);
+    const days = [...merged.keys()].sort((a, b) => a - b);
+    await client.query(
+      `INSERT INTO bars (ticker, days, open, close, volume, updated_at) VALUES ($1, $2::smallint[], $3::real[], $4::real[], $5::real[], now())
+       ON CONFLICT (ticker) DO UPDATE SET days = EXCLUDED.days, open = EXCLUDED.open, close = EXCLUDED.close, volume = EXCLUDED.volume, updated_at = now()`,
+      [ticker, days, days.map((d) => merged.get(d)[0]), days.map((d) => merged.get(d)[1]), days.map((d) => merged.get(d)[2])]
+    );
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
   return rows.length;
 }
 
+// Rows per ticker: [{ day, open, close, volume }]
 async function loadPrices(pool, tickers, { fromDay = '1900-01-01' } = {}) {
-  const { rows } = await pool.query(
-    `SELECT ticker, day::text AS day, open, high, low, close, adj_close AS "adjClose", volume FROM prices WHERE ticker = ANY($1) AND day >= $2 ORDER BY ticker, day`,
-    [tickers, fromDay]
-  );
+  const from = dayNum(fromDay);
+  const { rows } = await pool.query('SELECT ticker, days, open, close, volume FROM bars WHERE ticker = ANY($1)', [tickers]);
   const out = new Map(tickers.map((t) => [t, []]));
-  for (const r of rows) out.get(r.ticker).push(r);
+  for (const r of rows) {
+    const list = out.get(r.ticker);
+    r.days.forEach((d, i) => { if (d >= from) list.push({ day: dayIso(d), open: r.open[i], close: r.close[i], volume: r.volume[i] }); });
+  }
   return out;
 }
 
-module.exports = { fetchPrices, fetchYahoo, parseYahoo, savePrices, loadPrices, yahooSymbol, getText, PriceError, BACKFILL_DAYS, FULL_REFRESH_DAYS, DAY_MS, isoDay, BROWSER_UA };
+// The same data as typed arrays (no per-row objects): { days: Int32Array of day numbers, open, close, volume: Float64Array }
+async function loadBars(pool, tickers, { fromDay = '1900-01-01' } = {}) {
+  const from = dayNum(fromDay);
+  const { rows } = await pool.query('SELECT ticker, days, open, close, volume FROM bars WHERE ticker = ANY($1)', [tickers]);
+  const out = new Map();
+  for (const r of rows) {
+    const keep = r.days.map((d, i) => (d >= from ? i : -1)).filter((i) => i >= 0);
+    out.set(r.ticker, {
+      days: Int32Array.from(keep, (i) => r.days[i]), open: Float64Array.from(keep, (i) => r.open[i]),
+      close: Float64Array.from(keep, (i) => r.close[i]), volume: Float64Array.from(keep, (i) => r.volume[i]),
+    });
+  }
+  return out;
+}
+
+module.exports = { fetchPrices, fetchYahoo, parseYahoo, savePrices, loadPrices, loadBars, dayNum, dayIso, yahooSymbol, getText, PriceError, BACKFILL_DAYS, FULL_REFRESH_DAYS, DAY_MS, isoDay, BROWSER_UA };

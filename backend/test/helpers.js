@@ -7,7 +7,7 @@ const TEST_DB = process.env.TEST_DATABASE_URL || 'postgres://postgres:postgres@l
 
 // Clears all RAVE data
 async function resetRave(pool) {
-  await pool.query('TRUNCATE collection_runs, raw_snapshots, ticker_days, market_days, tickers, wiki_pages, wiki_months, prices, price_sync, validation_runs, spike_events RESTART IDENTITY CASCADE');
+  await pool.query('TRUNCATE collection_runs, raw_snapshots, ticker_days, market_days, tickers, wiki_pages, wiki_months, bars, price_sync, validation_runs, spike_events RESTART IDENTITY CASCADE');
 }
 
 async function setup() {

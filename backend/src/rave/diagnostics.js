@@ -63,10 +63,28 @@ function candidateProbes2() {
   ];
 }
 
+// Round three: Yahoo can return earnings dates as chart events, and with a cookie and crumb the quote-summary calendar works
+function candidateProbes3() {
+  return [
+    ['yahoo-chart-earnings', 'https://query1.finance.yahoo.com/v8/finance/chart/GME?range=5y&interval=1d&events=earn', (b) => {
+      const e = b?.chart?.result?.[0]?.events;
+      const n = e?.earnings ? Object.keys(e.earnings).length : 0;
+      return { ok: n > 0, detail: `${n} earnings events; event kinds: ${e ? Object.keys(e).join(',') : 'none'}; sample ${n ? JSON.stringify(Object.values(e.earnings)[0]).slice(0, 120) : ''}` };
+    }, { headers: { 'User-Agent': BROWSER_UA } }],
+    ['yahoo-chart-earnings-aapl', 'https://query1.finance.yahoo.com/v8/finance/chart/AAPL?range=5y&interval=1d&events=earn%2Cdiv%2Csplit', (b) => {
+      const e = b?.chart?.result?.[0]?.events;
+      const n = e?.earnings ? Object.keys(e.earnings).length : 0;
+      return { ok: n > 0, detail: `${n} earnings events; kinds ${e ? Object.keys(e).join(',') : 'none'}` };
+    }, { headers: { 'User-Agent': BROWSER_UA } }],
+    ['arctic-aggregate-small', 'https://arctic-shift.photon-reddit.com/api/posts/search/aggregate?subreddit=wallstreetbets&title=GME&aggregate=created_utc&frequency=week&after=2025-01-01&before=2025-02-01', (b) => ({ ok: Array.isArray(b?.data), detail: `${b?.data?.length ?? 0} buckets ${JSON.stringify(b?.data?.slice(0, 3))} ${b?.error || ''}` })],
+    ['gdelt-tone-queries', 'https://api.gdeltproject.org/api/v2/doc/doc?query=%22GameStop%22%20sourcelang%3Aenglish&mode=timelinetone&format=json&timespan=3y', (b) => ({ ok: Array.isArray(b?.timeline), detail: `${b?.timeline?.[0]?.data?.length ?? 0} points over 3y; first ${JSON.stringify(b?.timeline?.[0]?.data?.[0])}` })],
+  ];
+}
+
 async function runDiagnostics(extra = [], opts = {}) {
   const out = [];
   for (const [source, url, check, o] of probes(extra)) out.push(await probe(source, url, check, { ...opts, ...(o || {}) }));
   return out;
 }
 
-module.exports = { runDiagnostics, probe, probes, candidateProbes, candidateProbes2 };
+module.exports = { runDiagnostics, probe, probes, candidateProbes, candidateProbes2, candidateProbes3 };

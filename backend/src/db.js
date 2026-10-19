@@ -247,6 +247,23 @@ const migrations = [
 
   // Two forward-test ledgers: Reddit spikes and Wikipedia spikes
   `ALTER TABLE spike_events ADD COLUMN source TEXT NOT NULL DEFAULT 'reddit';`,
+
+  // Compact price storage (parallel arrays per ticker instead of a row per day) so five years for thousands of stocks fits easily;
+  // every ticker is re-fetched once with the longer history
+  `CREATE TABLE bars (
+     ticker TEXT PRIMARY KEY,
+     days SMALLINT[] NOT NULL,
+     open REAL[] NOT NULL,
+     close REAL[] NOT NULL,
+     volume REAL[] NOT NULL,
+     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+   );
+   INSERT INTO bars (ticker, days, open, close, volume)
+   SELECT ticker, array_agg((day - DATE '1970-01-01')::smallint ORDER BY day), array_agg(open::real ORDER BY day),
+          array_agg(close::real ORDER BY day), array_agg(volume::real ORDER BY day)
+   FROM prices GROUP BY ticker;
+   DROP TABLE prices;
+   UPDATE price_sync SET full_at = NULL;`,
 ];
 
 function createPool(connectionString = process.env.DATABASE_URL) {

@@ -104,7 +104,7 @@ test('ledger: entry at the next open after detection, outcomes computed against 
   assert.equal(rows[0].entry_day, isoDay(mon), 'detected before the open: that day');
   assert.equal(rows[1].entry_day, isoDay(mon + 86400000), 'detected after the open: the next trading day');
   assert.equal(rows[2].entry_day, isoDay(mon), 'detected on a Saturday: Monday');
-  const idx = (await pool.query(`SELECT day::text AS day FROM prices WHERE ticker = 'GME' ORDER BY day`)).rows.map((r) => r.day);
+  const idx = (await prices.loadPrices(pool, ['GME'])).get('GME').map((r) => r.day);
   const e0 = idx.indexOf(rows[0].entry_day);
   assert.equal(rows[0].entry_open, 10 + e0);
   const day1 = rows[0].outcomes['1'];
