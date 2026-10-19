@@ -287,6 +287,21 @@ const migrations = [
      fetched_at TIMESTAMPTZ NOT NULL,
      next_day DATE
    );`,
+
+  // News attention and tone per stock (GDELT), one row per stock per month with 31 day slots
+  `CREATE TABLE news_months (
+     ticker TEXT NOT NULL,
+     month DATE NOT NULL,
+     tone REAL[] NOT NULL,
+     vol REAL[] NOT NULL,
+     PRIMARY KEY (ticker, month)
+   );
+   CREATE TABLE news_checks (
+     ticker TEXT PRIMARY KEY,
+     fetched_at TIMESTAMPTZ NOT NULL,
+     history BOOLEAN NOT NULL DEFAULT false,
+     days INTEGER
+   );`,
 ];
 
 function createPool(connectionString = process.env.DATABASE_URL) {

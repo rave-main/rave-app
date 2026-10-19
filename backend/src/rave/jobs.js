@@ -5,6 +5,7 @@ const { runWikipedia } = require('./wikijob');
 const { runPrices } = require('./pricejob');
 const { runUniverse } = require('./universe');
 const { runEarnings } = require('./earnings');
+const { runNews } = require('./news');
 const { runResearch, recordSpikes, updateLedger } = require('./research');
 
 function buildJobs() {
@@ -38,6 +39,14 @@ function buildJobs() {
       times: ['02:20', '14:20'],
       staleAfterMs: 30 * 60 * 60 * 1000,
       run: (pool, ctx) => runEarnings(pool, ctx),
+    },
+    {
+      kind: 'news',
+      label: 'News attention and tone (GDELT)',
+      cadence: 'twice a day, 06:40 and 18:40 UTC, for the 300 most talked-about stocks (one request every 5 seconds, so a pass takes an hour or two)',
+      times: ['06:40', '18:40'],
+      staleAfterMs: 36 * 60 * 60 * 1000,
+      run: (pool, ctx) => runNews(pool, ctx),
     },
     {
       kind: 'wikipedia',
