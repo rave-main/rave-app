@@ -3,6 +3,7 @@ const { every } = require('./scheduler');
 const { runCollection } = require('./collector');
 const { runWikipedia } = require('./wikijob');
 const { runPrices } = require('./pricejob');
+const { runUniverse } = require('./universe');
 const { runResearch, recordSpikes, updateLedger } = require('./research');
 
 function buildJobs() {
@@ -20,6 +21,14 @@ function buildJobs() {
         if (result.status === 'success') await recordSpikes(pool).catch((e) => (ctx?.log || console).error('RAVE recordSpikes failed:', e.message));
         return result;
       },
+    },
+    {
+      kind: 'universe',
+      label: 'Research universe (S&P 1500 lists)',
+      cadence: 'weekly (checked daily at 03:10 UTC); the S&P 500, 400 and 600 company lists from Wikipedia',
+      times: ['03:10'],
+      staleAfterMs: 9 * 24 * 60 * 60 * 1000,
+      run: (pool, ctx) => runUniverse(pool, ctx),
     },
     {
       kind: 'wikipedia',

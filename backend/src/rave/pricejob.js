@@ -10,7 +10,8 @@ async function runPrices(pool, { log = console, deadlineMs = 9 * 60 * 1000, paus
   const started = Date.now();
   const opts = { fetchImpl, retryDelayMs: pauseMs * 4 };
   const tracked = await listStocks(pool); // one entry per company (share classes merged)
-  const universe = [...new Set([BENCHMARK, ...tracked.map((t) => t.ticker)])];
+  const { rows: index } = await pool.query('SELECT ticker FROM universe');
+  const universe = [...new Set([BENCHMARK, ...tracked.map((t) => t.ticker), ...index.map((i) => i.ticker)])];
   const { rows: sync } = await pool.query('SELECT ticker, full_at, last_day::text AS last_day, error, checked_at FROM price_sync WHERE ticker = ANY($1)', [universe]);
   const byTicker = new Map(sync.map((s) => [s.ticker, s]));
   const today = prices.isoDay(now);

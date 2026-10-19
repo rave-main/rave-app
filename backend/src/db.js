@@ -264,6 +264,16 @@ const migrations = [
    FROM prices GROUP BY ticker;
    DROP TABLE prices;
    UPDATE price_sync SET full_at = NULL;`,
+
+  // The research universe (S&P 500, 400 and 600 constituents) with Wikipedia articles taken from the index lists
+  `CREATE TABLE universe (
+     ticker TEXT PRIMARY KEY,
+     name TEXT NOT NULL,
+     article TEXT,
+     index_name TEXT NOT NULL,
+     sector TEXT,
+     checked_at TIMESTAMPTZ NOT NULL DEFAULT now()
+   );`,
 ];
 
 function createPool(connectionString = process.env.DATABASE_URL) {

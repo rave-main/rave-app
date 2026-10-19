@@ -37,8 +37,7 @@ async function runWikipedia(pool, { log = console, deadlineMs = 8 * 60 * 1000, p
 
   // 2. top up daily views for every distinct article of a tracked ticker
   const { rows: articles } = await pool.query(
-    `SELECT DISTINCT p.article FROM wiki_pages p WHERE p.article IS NOT NULL AND p.ticker = ANY($1) ORDER BY p.article`,
-    [tracked.map((t) => t.ticker)]
+    `SELECT DISTINCT p.article FROM wiki_pages p WHERE p.article IS NOT NULL ORDER BY p.article`
   );
   const yesterday = wiki.isoDay(now - wiki.DAY_MS);
   let attempted = 0;
