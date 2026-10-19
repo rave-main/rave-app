@@ -274,6 +274,19 @@ const migrations = [
      sector TEXT,
      checked_at TIMESTAMPTZ NOT NULL DEFAULT now()
    );`,
+
+  // Company results dates: the next date Yahoo announces per stock, and the dates seen so far (history grows from now on)
+  `CREATE TABLE earnings_dates (
+     ticker TEXT NOT NULL,
+     day DATE NOT NULL,
+     PRIMARY KEY (ticker, day)
+   );
+   CREATE INDEX earnings_dates_day_idx ON earnings_dates(day);
+   CREATE TABLE earnings_checks (
+     ticker TEXT PRIMARY KEY,
+     fetched_at TIMESTAMPTZ NOT NULL,
+     next_day DATE
+   );`,
 ];
 
 function createPool(connectionString = process.env.DATABASE_URL) {

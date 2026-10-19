@@ -4,6 +4,7 @@ const { runCollection } = require('./collector');
 const { runWikipedia } = require('./wikijob');
 const { runPrices } = require('./pricejob');
 const { runUniverse } = require('./universe');
+const { runEarnings } = require('./earnings');
 const { runResearch, recordSpikes, updateLedger } = require('./research');
 
 function buildJobs() {
@@ -29,6 +30,14 @@ function buildJobs() {
       times: ['03:10'],
       staleAfterMs: 9 * 24 * 60 * 60 * 1000,
       run: (pool, ctx) => runUniverse(pool, ctx),
+    },
+    {
+      kind: 'earnings',
+      label: 'Company results dates (Yahoo Finance)',
+      cadence: 'twice a day, 02:20 and 14:20 UTC; each stock is re-checked every 5 days',
+      times: ['02:20', '14:20'],
+      staleAfterMs: 30 * 60 * 60 * 1000,
+      run: (pool, ctx) => runEarnings(pool, ctx),
     },
     {
       kind: 'wikipedia',
