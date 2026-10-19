@@ -29,10 +29,31 @@ function probes(extra = []) {
   ];
 }
 
+// Sources we may add (earnings dates, news, Reddit history, index lists). Probed on request so a new source can be judged from the deployed
+// service before any code depends on it: /api/rave/diagnostics?candidates=1
+const SEC_UA = 'RAVE research (https://github.com/rave-main/rave-app) rave-research@example.com';
+function candidateProbes() {
+  const sec = { headers: { 'User-Agent': SEC_UA, Accept: 'application/json' } };
+  return [
+    ['sec-submissions', 'https://data.sec.gov/submissions/CIK0001326380.json', (b) => ({ ok: Array.isArray(b?.filings?.recent?.form), detail: `${b?.filings?.recent?.form?.length ?? 0} recent filings, ${b?.filings?.recent?.items?.filter((i) => /2\.02/.test(i)).length ?? 0} with item 2.02 (results)` }), sec],
+    ['sec-company-tickers', 'https://www.sec.gov/files/company_tickers.json', (b) => ({ ok: b && Object.keys(b).length > 1000, detail: `${b ? Object.keys(b).length : 0} companies` }), sec],
+    ['gdelt-news-tone', 'https://api.gdeltproject.org/api/v2/doc/doc?query=GameStop%20sourcelang%3Aenglish&mode=timelinetone&format=json&timespan=1y', (b) => ({ ok: Array.isArray(b?.timeline), detail: `${b?.timeline?.[0]?.data?.length ?? 0} points of news tone` })],
+    ['gdelt-news-volume', 'https://api.gdeltproject.org/api/v2/doc/doc?query=GameStop%20sourcelang%3Aenglish&mode=timelinevolraw&format=json&timespan=1y', (b) => ({ ok: Array.isArray(b?.timeline), detail: `${b?.timeline?.[0]?.data?.length ?? 0} points of article counts` })],
+    ['google-news-rss', 'https://news.google.com/rss/search?q=GameStop+stock&hl=en-US&gl=US&ceid=US:en', (b, t) => ({ ok: /<item>/.test(t), detail: `${(t.match(/<item>/g) || []).length} headlines` })],
+    ['yahoo-news-rss', 'https://feeds.finance.yahoo.com/rss/2.0/headline?s=GME&region=US&lang=en-US', (b, t) => ({ ok: /<item>/.test(t), detail: `${(t.match(/<item>/g) || []).length} headlines` })],
+    ['nasdaq-earnings', 'https://api.nasdaq.com/api/calendar/earnings?date=2026-10-15', (b) => ({ ok: Array.isArray(b?.data?.rows), detail: `${b?.data?.rows?.length ?? 0} companies reporting` }), { headers: { 'User-Agent': BROWSER_UA, Accept: 'application/json' } }],
+    ['yahoo-calendar', 'https://query2.finance.yahoo.com/v10/finance/quoteSummary/GME?modules=calendarEvents', (b) => ({ ok: Boolean(b?.quoteSummary?.result), detail: b?.quoteSummary?.error ? b.quoteSummary.error.description : 'calendar found' }), { headers: { 'User-Agent': BROWSER_UA } }],
+    ['arctic-shift-reddit', 'https://arctic-shift.photon-reddit.com/api/posts/search?subreddit=wallstreetbets&limit=1&sort=asc', (b) => ({ ok: Array.isArray(b?.data), detail: `${b?.data?.length ?? 0} posts, oldest ${b?.data?.[0]?.created_utc ? new Date(b.data[0].created_utc * 1000).toISOString().slice(0, 10) : '?'}` })],
+    ['wikipedia-sp500-list', 'https://en.wikipedia.org/w/api.php?action=parse&page=List_of_S%26P_500_companies&prop=sections&format=json&formatversion=2', (b) => ({ ok: Array.isArray(b?.parse?.sections), detail: `${b?.parse?.sections?.length ?? 0} sections` })],
+    ['wikipedia-sp400-list', 'https://en.wikipedia.org/w/api.php?action=parse&page=List_of_S%26P_400_companies&prop=sections&format=json&formatversion=2', (b) => ({ ok: Array.isArray(b?.parse?.sections), detail: `${b?.parse?.sections?.length ?? 0} sections` })],
+    ['stooq', 'https://stooq.com/q/d/l/?s=gme.us&i=d', (b, t) => ({ ok: t.startsWith('Date,'), detail: t.startsWith('Date,') ? 'reachable' : t.slice(0, 60) })],
+  ];
+}
+
 async function runDiagnostics(extra = [], opts = {}) {
   const out = [];
   for (const [source, url, check, o] of probes(extra)) out.push(await probe(source, url, check, { ...opts, ...(o || {}) }));
   return out;
 }
 
-module.exports = { runDiagnostics, probe, probes };
+module.exports = { runDiagnostics, probe, probes, candidateProbes };

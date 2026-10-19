@@ -7,7 +7,7 @@ const { jobsStatus } = require('./scheduler');
 const { buildJobs } = require('./jobs');
 const { runCollection } = require('./collector');
 const { runRecorded } = require('./scheduler');
-const { runDiagnostics } = require('./diagnostics');
+const { runDiagnostics, candidateProbes } = require('./diagnostics');
 const { loadWikiSeries } = require('./wiki');
 const { ledgerSummary, loadBacktestData } = require('./research');
 const { loadPrices } = require('./prices');
@@ -138,7 +138,8 @@ function raveRouter(pool) {
 
   // Can this deployment reach each external source right now?
   router.get('/diagnostics', wrap(async (req, res) => {
-    res.json({ at: new Date().toISOString(), results: await runDiagnostics() });
+    const results = await runDiagnostics(req.query.candidates ? candidateProbes() : []);
+    res.json({ at: new Date().toISOString(), results });
   }));
 
   // Raw research data for offline analysis: Wikipedia daily views and daily prices per stock, in pages of `limit` stocks
