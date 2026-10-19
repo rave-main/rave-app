@@ -168,3 +168,10 @@ met after repeated attempts; results show no signal.
   now explains it in three steps. Forward ledgers: Reddit and Wikipedia (frozen rule) as the clean out-of-sample test.
 - Incident: a one-line Python helper (`open(p,'w').write(open(p).read()...)`) truncated `rave-research.test.js` to empty and it was committed in e84fc2a, so the
   suite silently ran 8 tests fewer. Restored from history. Lesson: never write helpers that open for writing before reading.
+
+## 2026-10-19: long-horizon lab (lab2) and survivorship
+- Added `lab2.js`: weekly rows, 20 and 60 session horizons, market-adjusted labels, stage 1 (big shift or not) and stage 2 (up or down), walk-forward with embargo, long/short deciles after costs, baselines.
+- Added point-in-time index membership (`universe.added_day/removed_day`). S&P 400 and 600 changes read from Wikipedia; the S&P 500 page no longer has a changes table, so S&P 500 leavers are missing.
+- Result (1,463 stocks, 115 of them leavers with prices; most delisted stocks have no Yahoo history, so some survivorship remains): 20-session score long/short +0.2% per period (CI -0.9% to +1.2%); 60-session +2.3% (CI -1.1% to +5.9%, only 10 non-overlapping periods). Direction AUC at 60 sessions 0.76 (0.72 survivors only), so the leavers did not remove it, but the money result is not significant and low-volatility baselines lost heavily, i.e. a regime effect. Wikipedia attention and earnings add almost nothing to detecting big shifts (stage 1 AUC 0.62 either way). Conclusion: no proven edge; volatility is the usable signal.
+- Radar and stock page now show a typical 20-day swing (risk) and a "ran" flag (5-day move already above 1.5x normal).
+- Production lab2 job restarts without finishing (probably killed or too slow); results above were produced offline from `/api/rave/export/lab`. Needs a lighter job or a bigger worker.
