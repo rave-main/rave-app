@@ -302,6 +302,9 @@ const migrations = [
      history BOOLEAN NOT NULL DEFAULT false,
      days INTEGER
    );`,
+
+  // Index membership over time: when a company joined (inside the research window) and, for companies that left, when
+  `ALTER TABLE universe ADD COLUMN added_day DATE, ADD COLUMN removed_day DATE, ADD COLUMN active BOOLEAN NOT NULL DEFAULT true;`,
 ];
 
 function createPool(connectionString = process.env.DATABASE_URL) {

@@ -11,6 +11,20 @@ const PAGES = [
 ];
 const REFRESH_AFTER_DAYS = 6;
 
+const MONTHS = { january: 1, february: 2, march: 3, april: 4, may: 5, june: 6, july: 7, august: 8, september: 9, october: 10, november: 11, december: 12 };
+const pad = (n) => String(n).padStart(2, '0');
+// "October 6, 2025", "6 October 2025" or "2025-10-06" -> "2025-10-06"; anything else -> null
+function parseDate(text) {
+  const t = String(text).replace(/\[.*?\]/g, '').trim();
+  let m = /^(\d{4})-(\d{2})-(\d{2})/.exec(t);
+  if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+  m = /^([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})/.exec(t);
+  if (m && MONTHS[m[1].toLowerCase()]) return `${m[3]}-${pad(MONTHS[m[1].toLowerCase()])}-${pad(m[2])}`;
+  m = /^(\d{1,2})\s+([A-Za-z]+),?\s+(\d{4})/.exec(t);
+  if (m && MONTHS[m[2].toLowerCase()]) return `${m[3]}-${pad(MONTHS[m[2].toLowerCase()])}-${pad(m[1])}`;
+  return null;
+}
+
 const strip = (html) => html.replace(/<[^>]*>/g, '').replace(/&amp;/g, '&').replace(/&#160;|&nbsp;/g, ' ').replace(/&#(\d+);/g, (m, n) => String.fromCharCode(Number(n))).replace(/\s+/g, ' ').trim();
 const SYMBOL = /^[A-Z][A-Z0-9]{0,5}([.-][A-Z0-9]{1,2})?$/;
 
@@ -20,6 +34,8 @@ function parseIndexTable(html) {
   let best = [];
   for (const table of tables) {
     const rows = [];
+    const header = [...(table.split(/<tr\b/i)[1] || '').matchAll(/<th\b[^>]*>([\s\S]*?)<\/th>/gi)].map((m) => strip(m[1]).toLowerCase());
+    const addedCol = header.findIndex((h) => /date.*added/.test(h));
     for (const tr of table.split(/<tr\b/i).slice(1)) {
       const cells = [...tr.matchAll(/<td\b[^>]*>([\s\S]*?)<\/td>/gi)].map((m) => m[1]);
       if (cells.length < 2) continue;
@@ -31,11 +47,34 @@ function parseIndexTable(html) {
       if (!name) continue;
       const red = /redlink=1|class="new"/.test(cells[1]);
       const article = !red && link ? decodeURIComponent(link[1]).replace(/_/g, ' ') : !red && titleAttr ? strip(titleAttr[1]) : null;
-      rows.push({ ticker: symbol.replace(/-/g, '.'), name, article, sector: cells[2] ? strip(cells[2]) : null });
+      rows.push({ ticker: symbol.replace(/-/g, '.'), name, article, sector: cells[2] ? strip(cells[2]) : null, added: addedCol >= 0 && cells[addedCol] ? parseDate(strip(cells[addedCol])) : null });
     }
     if (rows.length > best.length) best = rows;
   }
   return best;
+}
+
+// The "selected changes" table: when a company joined or left the index. Rows repeat the date only once (rowspan), so a row without a date uses the one above.
+function parseChanges(html) {
+  const out = [];
+  for (const table of html.split(/<table\b/i).slice(1)) {
+    const head = (table.split(/<tr\b/i).slice(1, 3).join(' ')).toLowerCase();
+    if (!/added/.test(head) || !/removed/.test(head)) continue;
+    let day = null;
+    for (const tr of table.split(/<tr\b/i).slice(1)) {
+      const cells = [...tr.matchAll(/<td\b[^>]*>([\s\S]*?)<\/td>/gi)].map((m) => strip(m[1]));
+      if (cells.length < 4) continue;
+      let rest = cells;
+      const d = parseDate(cells[0]);
+      if (d) { day = d; rest = cells.slice(1); }
+      if (!day) continue;
+      const [addT, addName, remT, remName] = rest;
+      const clean = (t) => (t && SYMBOL.test(t.replace(/\s/g, '').toUpperCase()) ? t.replace(/\s/g, '').toUpperCase().replace(/-/g, '.') : null);
+      const added = clean(addT), removed = clean(remT);
+      if (added || removed) out.push({ day, added, addedName: addName || null, removed, removedName: remName || null });
+    }
+  }
+  return out;
 }
 
 async function fetchIndex(page, opts = {}) {
@@ -43,16 +82,21 @@ async function fetchIndex(page, opts = {}) {
   const body = await wiki.getJson(url, opts);
   const html = body?.parse?.text;
   if (typeof html !== 'string') throw new wiki.WikiError(`no table in ${page}`);
-  return parseIndexTable(html);
+  return { rows: parseIndexTable(html), changes: parseChanges(html) };
 }
 
+// Current members, then the changes that happened since CHANGES_FROM: members join on their added date; companies that left (and are not in
+// any index now) are kept as inactive rows with the day they left, so the research can use the membership as it was on each day
+const CHANGES_FROM = '2021-01-01';
 async function saveUniverse(pool, indexName, rows) {
   let n = 0;
   for (const r of rows) {
     await pool.query(
-      `INSERT INTO universe (ticker, name, article, index_name, sector, checked_at) VALUES ($1, $2, $3, $4, $5, now())
-       ON CONFLICT (ticker) DO UPDATE SET name = EXCLUDED.name, article = coalesce(EXCLUDED.article, universe.article), index_name = EXCLUDED.index_name, sector = EXCLUDED.sector, checked_at = now()`,
-      [r.ticker, r.name, r.article, indexName, r.sector]
+      `INSERT INTO universe (ticker, name, article, index_name, sector, added_day, removed_day, active, checked_at) VALUES ($1, $2, $3, $4, $5, $6, NULL, true, now())
+       ON CONFLICT (ticker) DO UPDATE SET name = EXCLUDED.name, article = coalesce(EXCLUDED.article, universe.article), index_name = EXCLUDED.index_name, sector = EXCLUDED.sector,
+         added_day = CASE WHEN universe.added_day IS NULL THEN EXCLUDED.added_day WHEN EXCLUDED.added_day IS NULL THEN universe.added_day ELSE LEAST(universe.added_day, EXCLUDED.added_day) END,
+         removed_day = NULL, active = true, checked_at = now()`,
+      [r.ticker, r.name, r.article, indexName, r.sector, r.added && r.added >= CHANGES_FROM ? r.added : null]
     );
     // Wikipedia page for the stock, taken from the list. Never overrides a choice made by hand or an existing automatic match.
     if (r.article) {
@@ -66,22 +110,46 @@ async function saveUniverse(pool, indexName, rows) {
   return n;
 }
 
+async function saveChanges(pool, indexName, changes) {
+  let added = 0, removed = 0;
+  for (const c of changes.filter((x) => x.day >= CHANGES_FROM)) {
+    if (c.added) {
+      const r = await pool.query(`UPDATE universe SET added_day = CASE WHEN added_day IS NULL THEN $2 ELSE LEAST(added_day, $2::date) END WHERE ticker = $1 AND active`, [c.added, c.day]);
+      added += r.rowCount;
+    }
+    if (c.removed) {
+      // a company that moved to another index (or came back) is still in the universe
+      const r = await pool.query(
+        `INSERT INTO universe (ticker, name, article, index_name, sector, added_day, removed_day, active, checked_at) VALUES ($1, $2, NULL, $3, NULL, NULL, $4, false, now())
+         ON CONFLICT (ticker) DO UPDATE SET removed_day = CASE WHEN universe.active THEN NULL ELSE GREATEST(coalesce(universe.removed_day, $4::date), $4::date) END`,
+        [c.removed, c.removedName || c.removed, indexName, c.day]
+      );
+      removed += r.rowCount;
+    }
+  }
+  return { added, removed };
+}
+
 async function runUniverse(pool, { log = console, fetchImpl = fetch, now = Date.now(), force = false } = {}) {
   const { rows: [last] } = await pool.query('SELECT max(checked_at) AS at FROM universe');
   if (!force && last.at && now - new Date(last.at).getTime() < REFRESH_AFTER_DAYS * 86400000) return { skipped: 'refreshed recently', refreshedAt: last.at };
-  const details = { lists: {}, total: 0, errors: [] };
+  const details = { lists: {}, total: 0, changes: {}, errors: [] };
+  const pending = [];
   for (const [name, page] of PAGES) {
     try {
-      const rows = await fetchIndex(page, { fetchImpl });
+      const { rows, changes } = await fetchIndex(page, { fetchImpl });
       if (rows.length < 100) throw new Error(`only ${rows.length} rows found`);
       details.lists[name] = await saveUniverse(pool, name, rows);
       details.total += details.lists[name];
+      pending.push([name, changes]);
     } catch (err) {
       details.errors.push(`${name}: ${String(err.message).slice(0, 120)}`);
     }
   }
+  // changes are applied once every list is in, so a company that moved between indexes is not mistaken for one that left
+  for (const [name, changes] of pending) details.changes[name] = { found: changes.length, ...(await saveChanges(pool, name, changes)) };
   if (!details.total) throw new Error(`no index list could be read: ${details.errors.join('; ')}`);
   return details;
 }
 
-module.exports = { runUniverse, parseIndexTable, fetchIndex, PAGES };
+module.exports = { runUniverse, parseIndexTable, parseChanges, parseDate, fetchIndex, PAGES };

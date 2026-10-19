@@ -37,7 +37,7 @@ async function fetchNextEarnings(ticker, session, fetchImpl = fetch) {
 async function runEarnings(pool, { log = console, deadlineMs = 8 * 60 * 1000, pauseMs = 300, fetchImpl = fetch, now = Date.now() } = {}) {
   const started = Date.now();
   const [stocks, { rows: index }, { rows: checked }] = await Promise.all([
-    listStocks(pool), pool.query('SELECT ticker FROM universe'), pool.query('SELECT ticker, max(fetched_at) AS at FROM earnings_checks GROUP BY ticker'),
+    listStocks(pool), pool.query('SELECT ticker FROM universe WHERE active'), pool.query('SELECT ticker, max(fetched_at) AS at FROM earnings_checks GROUP BY ticker'),
   ]);
   const last = new Map(checked.map((c) => [c.ticker, new Date(c.at).getTime()]));
   const all = [...new Set([...stocks.map((s) => s.ticker), ...index.map((i) => i.ticker)])];
