@@ -176,3 +176,9 @@ met after repeated attempts; results show no signal.
 - Radar and stock page now show a typical 20-day swing (risk) and a "ran" flag (5-day move already above 1.5x normal).
 - Production lab2 job restarts without finishing (probably killed or too slow); results above were produced offline from `/api/rave/export/lab`. Needs a lighter job or a bigger worker.
 - Production lab2 now finishes (79 s, 489 MB peak, 1,632 stocks, 170 leavers with prices). With more leavers the 60-session direction AUC fell from 0.76 (offline run, 115 leavers) to 0.68, and the 20-session direction AUC is 0.53: the apparent edge shrinks as survivorship is removed, which is the expected sign of bias. Big-shift detection AUC stays about 0.63.
+
+## 2026-10-19: last bounded test of price-based direction signals (stop rule: test AUC about 0.55 and positive net return)
+Single-signal rank tests on the lab panel, test weeks only (last 60% of history), non-overlapping periods, costs 0.32% per leg plus 5% a year borrow. `docs/signals_check.py` reproduces it from the exported panel.
+- 4 weeks (31 periods): 1-week reversal AUC 0.487 (net -0.85%), 1-month reversal 0.495, momentum 12-1 0.516 (IC 0.039, t 1.8, net -0.10%), near 52-week high 0.519, volume surge 0.490, low volatility 0.511, small size 0.492. Reversal gated to high market volatility: AUC 0.50.
+- 12 weeks (10 periods): all AUC 0.48 to 0.52 except 1-month reversal gated to high market volatility, AUC 0.54, net +2.6% over only 6 periods (t 1.1), the best of 18 variants tried, so not distinguishable from luck.
+- Conclusion: none meets the stop rule. Short interest (FINRA) and insider buying (Form 4) were not built: published large-cap effects are tiny (insider about 14 bp) or pre-2010, and the chance of a tradable edge is low.
