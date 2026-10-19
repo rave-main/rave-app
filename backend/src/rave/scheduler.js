@@ -91,6 +91,17 @@ async function runRecorded(pool, job, { log = console } = {}) {
   }
 }
 
+// A deploy or restart kills any job that was mid-run and leaves its row marked "running", which would block the job for half an hour.
+// Called once at boot, before the scheduler starts: everything still marked running (apart from the last minute, in case two
+// instances overlap briefly) is a run that died with the previous process.
+async function abandonStaleRuns(pool) {
+  const { rowCount } = await pool.query(
+    `UPDATE collection_runs SET status = 'failed', finished_at = now(), error = 'abandoned (the process restarted mid-run)'
+     WHERE status = 'running' AND started_at < now() - interval '1 minute'`
+  );
+  return rowCount;
+}
+
 // jobs: [{ kind, label, times, staleAfterMs, run(pool, ctx) }]. A job with `selfRecording: true` (ApeWisdom) records
 // its own runs and returns { status }.
 function startScheduler(pool, jobs, { log = console, tickMs = TICK_MS, firstTickMs = 5000 } = {}) {
@@ -146,4 +157,4 @@ async function jobsStatus(pool, jobs, now = new Date()) {
   return out;
 }
 
-module.exports = { every, lastScheduledAt, nextScheduledAt, isDue, runRecorded, startScheduler, jobsStatus, TICK_MS };
+module.exports = { abandonStaleRuns, every, lastScheduledAt, nextScheduledAt, isDue, runRecorded, startScheduler, jobsStatus, TICK_MS };

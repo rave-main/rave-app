@@ -2,9 +2,10 @@
 // mentions the company ("volume") and the average tone of those articles (negative = bad news), one value per day. GDELT allows one request every
 // 5 seconds, so a full pass over a few hundred stocks takes an hour or two and runs in slices that continue by themselves.
 const wiki = require('./wiki');
+const { stockKind } = require('./stock-kind');
 
 const GDELT = 'https://api.gdeltproject.org/api/v2/doc/doc';
-const MIN_GAP_MS = 5500;
+const MIN_GAP_MS = 7000;
 const TOP_STOCKS = 300;
 const HISTORY = '1y'; // GDELT's long timelines are daily; this is what a first pass fetches
 const TOP_UP = '1month';
@@ -30,7 +31,7 @@ async function gdelt(query, mode, timespan, { fetchImpl = fetch, gapMs = MIN_GAP
     try {
       const res = await fetchImpl(url, { headers: { 'User-Agent': wiki.USER_AGENT, Accept: 'application/json' }, signal: AbortSignal.timeout(40000) });
       const text = await res.text();
-      if (res.status === 429) { last = new Error('GDELT asked to slow down (HTTP 429)'); await sleep(gapMs * (attempt + 1)); continue; }
+      if (res.status === 429) { last = new Error('GDELT asked to slow down (HTTP 429)'); await sleep(gapMs * 3 * (attempt + 1)); continue; }
       if (!res.ok) throw Object.assign(new Error(`GDELT HTTP ${res.status}`), { fatal: true });
       if (!text.trim()) return []; // no matching articles
       let body;
@@ -39,6 +40,7 @@ async function gdelt(query, mode, timespan, { fetchImpl = fetch, gapMs = MIN_GAP
     } catch (err) {
       if (err.fatal) throw err;
       last = err;
+      await sleep(gapMs * 2 * (attempt + 1)); // a dropped connection: wait longer before trying again
     }
   }
   throw last;
@@ -89,8 +91,8 @@ async function runNews(pool, { log = console, deadlineMs = 8 * 60 * 1000, fetchI
   const started = Date.now();
   const { rows: stocks } = await pool.query(
     `SELECT t.ticker, coalesce(p.article, t.name, t.ticker) AS name FROM tickers t LEFT JOIN wiki_pages p ON p.ticker = t.ticker
-     WHERE t.last_seen >= now() - interval '7 days' ORDER BY t.mentions DESC, t.ticker LIMIT $1`, [top]
-  );
+     WHERE t.last_seen >= now() - interval '7 days' ORDER BY t.mentions DESC, t.ticker LIMIT $1`, [top * 2]
+  ).then((r) => ({ rows: r.rows.filter((s) => stockKind(s.ticker, s.name) === 'company').slice(0, top) })); // funds have no company news
   const { rows: seen } = await pool.query('SELECT ticker, max(fetched_at) AS at, bool_or(history) AS history FROM news_checks GROUP BY ticker');
   const by = new Map(seen.map((s) => [s.ticker, s]));
   const due = stocks.filter((s) => !by.has(s.ticker) || now - new Date(by.get(s.ticker).at).getTime() > TOP_UP_EVERY_HOURS * 3600000)

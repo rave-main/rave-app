@@ -94,6 +94,8 @@ async function scoredStocks(pool) {
   const wikiOf = new Map(mapped.map((m) => [m.ticker, m]));
   const wseries = await loadWikiSeries(pool, [...new Set(mapped.filter((m) => m.article).map((m) => m.article))]);
   const prices = await loadPrices(pool, mains, { fromDay: new Date(Date.now() - 14 * 86400000).toISOString().slice(0, 10) });
+  const { rows: due } = await pool.query(`SELECT ticker, min(day)::text AS day, (min(day) - current_date)::int AS days FROM earnings_dates WHERE ticker = ANY($1) AND day >= current_date GROUP BY ticker`, [mains]);
+  const dueOf = new Map(due.map((d) => [d.ticker, { day: d.day, inDays: d.days }]));
   const AT_LEAST_RISING = ['Rising', 'Hot', 'Extreme'];
   const value = stocks.map((r) => {
     const merged = mergeSeries(r.tickers.map((t) => series.get(t)));
@@ -110,6 +112,7 @@ async function scoredStocks(pool) {
       dayOverDay: dayOverDay(r),
       spark: merged.slice(-48).map((p) => p.mentions), // about the last 24 hours
       price: priceSummary(prices.get(r.ticker)),
+      results: dueOf.get(r.ticker) || null,
       scores,
       wiki: m ? { article: m.article, status: m.status, confidence: m.confidence, source: m.source, scores: wikiScores, views } : { article: null, status: 'pending', confidence: 'none', source: 'auto', scores: null },
       // both signals agree when Reddit and Wikipedia are each at Rising or above (short horizon)

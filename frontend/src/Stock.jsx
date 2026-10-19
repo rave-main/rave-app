@@ -97,6 +97,7 @@ export default function Stock() {
           {price && <p className="price-line"><strong>{usd(price.close)}</strong> <small>US$ at the close on {new Date(`${price.day}T00:00:00Z`).toLocaleDateString([], { day: 'numeric', month: 'short', timeZone: 'UTC' })}</small>
             <span className={price.change1d >= 0 ? 'up' : 'down'}> {signedPct(price.change1d)} <small>1 day</small></span>
             <span className={price.change1w >= 0 ? 'up' : 'down'}> {signedPct(price.change1w)} <small>5 trading days</small></span></p>}
+          {data.results && <p className="muted">Company results expected on {data.results.day} ({data.results.inDays === 0 ? 'today' : `in ${data.results.inDays} day${data.results.inDays === 1 ? '' : 's'}`}). Big price moves are common around results.</p>}
           {latest && <p className="muted">{latest.ranked ? `Reddit rank #${latest.rank}${data.rank24hAgo ? ` (was #${data.rank24hAgo} a day ago)` : ''}` : 'Not on the Reddit leaderboard right now'} · updated {ago(now() - latest.t)}</p>}
           <p className="muted">
             Wikipedia: {wiki.article

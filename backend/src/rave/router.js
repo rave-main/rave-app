@@ -7,7 +7,7 @@ const { jobsStatus } = require('./scheduler');
 const { buildJobs } = require('./jobs');
 const { runCollection } = require('./collector');
 const { runRecorded } = require('./scheduler');
-const { runDiagnostics, candidateProbes, candidateProbes2, candidateProbes3 } = require('./diagnostics');
+const { runDiagnostics, candidateProbes, candidateProbes2, candidateProbes3, candidateProbes4 } = require('./diagnostics');
 const { loadWikiSeries } = require('./wiki');
 const { ledgerSummary, loadBacktestData } = require('./research');
 const { loadPrices } = require('./prices');
@@ -67,6 +67,7 @@ function raveRouter(pool) {
     res.json({
       prices: priceRows.map((p) => ({ day: p.day, close: p.close })),
       price: stock.price,
+      results: stock.results,
       spikes,
       wiki: {
         article: m?.article || null, status: m?.status || 'pending', confidence: m?.confidence || 'none', source: m?.source || 'auto', extract: m?.extract || null,
@@ -139,7 +140,7 @@ function raveRouter(pool) {
 
   // Can this deployment reach each external source right now?
   router.get('/diagnostics', wrap(async (req, res) => {
-    const results = await runDiagnostics(req.query.candidates === '3' ? candidateProbes3() : req.query.candidates === '2' ? candidateProbes2() : req.query.candidates ? candidateProbes() : []);
+    const results = await runDiagnostics(req.query.candidates === '4' ? candidateProbes4() : req.query.candidates === '3' ? candidateProbes3() : req.query.candidates === '2' ? candidateProbes2() : req.query.candidates ? candidateProbes() : []);
     res.json({ at: new Date().toISOString(), results });
   }));
 

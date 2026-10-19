@@ -1,7 +1,7 @@
 require('dotenv').config();
 const { createApp } = require('./src/app');
 const { createPool, migrate } = require('./src/db');
-const { startScheduler } = require('./src/rave/scheduler');
+const { startScheduler, abandonStaleRuns } = require('./src/rave/scheduler');
 const { buildJobs } = require('./src/rave/jobs');
 
 const PORT = process.env.PORT || 3000;
@@ -16,7 +16,12 @@ async function main() {
   });
 
   // RAVE_COLLECTOR=off disables all scheduled collection (e.g. for a second local instance)
-  const stopScheduler = process.env.RAVE_COLLECTOR === 'off' ? () => {} : startScheduler(pool, buildJobs());
+  let stopScheduler = () => {};
+  if (process.env.RAVE_COLLECTOR !== 'off') {
+    const n = await abandonStaleRuns(pool);
+    if (n) console.log(`RAVE: ${n} run(s) from the previous process were marked abandoned`);
+    stopScheduler = startScheduler(pool, buildJobs());
+  }
   process.on('SIGTERM', () => {
     stopScheduler();
     server.close(() => process.exit(0));

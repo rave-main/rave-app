@@ -61,3 +61,18 @@ test('a refused session fails the run clearly instead of recording nothing silen
   await assert.rejects(runEarnings(pool, { fetchImpl: y.fetchImpl, pauseMs: 0 }), /Yahoo results dates failing/);
   await assert.rejects(runEarnings(pool, { fetchImpl: fakeYahoo({ crumbStatus: 401 }).fetchImpl, pauseMs: 0 }), /crumb request failed/);
 });
+
+test('the Radar rows and the stock page show the next results date', async () => {
+  const { signedInAgent } = require('./helpers');
+  const { createApp } = require('../src/app');
+  const app = createApp({ pool, frontendOrigin: 'https://app.example' });
+  await resetRave(pool);
+  await pool.query('DELETE FROM universe');
+  await seedHistory(pool, { GME: simulateCounts({ days: 3, level: 30, seed: 1 }), TSLA: simulateCounts({ days: 3, level: 30, seed: 2 }) });
+  await pool.query(`INSERT INTO earnings_dates (ticker, day) VALUES ('GME', $1), ('GME', $2), ('TSLA', $3)`, [day(-3), day(9), day(-1)]);
+  const { agent } = await signedInAgent(app);
+  const { body } = await agent.get('/api/rave/stocks').expect(200);
+  assert.deepEqual(body.find((s) => s.ticker === 'GME').results, { day: day(9), inDays: 9 });
+  assert.equal(body.find((s) => s.ticker === 'TSLA').results, null, 'a date in the past is not "upcoming"');
+  assert.equal((await agent.get('/api/rave/stocks/GME').expect(200)).body.results.inDays, 9);
+});

@@ -81,10 +81,25 @@ function candidateProbes3() {
   ];
 }
 
+// Round four: how to count ticker mentions in r/wallstreetbets history (Arctic Shift), tried on a week when GME was everywhere
+function candidateProbes4() {
+  const base = 'https://arctic-shift.photon-reddit.com/api';
+  const win = 'subreddit=wallstreetbets&aggregate=created_utc&frequency=day&after=2021-01-25&before=2021-02-01';
+  const show = (b) => ({ ok: Array.isArray(b?.data), detail: `${b?.data?.length ?? 0} buckets ${JSON.stringify(b?.data?.slice(0, 3))} ${b?.error || ''}` });
+  return [
+    ['arctic-posts-title', `${base}/posts/search/aggregate?${win}&title=GME`, show],
+    ['arctic-posts-query', `${base}/posts/search/aggregate?${win}&query=GME`, show],
+    ['arctic-posts-selftext', `${base}/posts/search/aggregate?${win}&selftext=GME`, show],
+    ['arctic-comments-body', `${base}/comments/search/aggregate?${win}&body=GME`, show],
+    ['arctic-comments-query', `${base}/comments/search/aggregate?${win}&query=GME`, show],
+    ['arctic-posts-search-title', `${base}/posts/search?subreddit=wallstreetbets&title=GME&after=2021-01-27&before=2021-01-28&limit=3&fields=title,created_utc`, (b) => ({ ok: Array.isArray(b?.data), detail: `${b?.data?.length ?? 0} posts: ${JSON.stringify(b?.data?.map((p) => p.title?.slice(0, 40)))}` })],
+  ];
+}
+
 async function runDiagnostics(extra = [], opts = {}) {
   const out = [];
   for (const [source, url, check, o] of probes(extra)) out.push(await probe(source, url, check, { ...opts, ...(o || {}) }));
   return out;
 }
 
-module.exports = { runDiagnostics, probe, probes, candidateProbes, candidateProbes2, candidateProbes3 };
+module.exports = { runDiagnostics, probe, probes, candidateProbes, candidateProbes2, candidateProbes3, candidateProbes4 };

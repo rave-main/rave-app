@@ -100,3 +100,13 @@ test('jobsStatus reports freshness, and the registered jobs have sensible cadenc
   assert.equal(ape.times.length, 48, 'ApeWisdom every 30 minutes');
   assert.equal(ape.selfRecording, true);
 });
+
+test('runs left "running" by a process that died are abandoned at boot, so the job is due again at once', async () => {
+  const { abandonStaleRuns } = require('../src/rave/scheduler');
+  await resetRave(pool);
+  await pool.query(`INSERT INTO collection_runs (kind, status, started_at) VALUES ('rec', 'running', now() - interval '10 minutes'), ('rec', 'running', now() - interval '10 seconds')`);
+  assert.equal(await abandonStaleRuns(pool), 1, 'the run from a few seconds ago may belong to an overlapping instance');
+  const { rows } = await pool.query(`SELECT status, error FROM collection_runs ORDER BY started_at`);
+  assert.deepEqual(rows.map((r) => r.status), ['failed', 'running']);
+  assert.match(rows[0].error, /restarted/);
+});
