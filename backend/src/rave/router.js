@@ -11,6 +11,7 @@ const { runDiagnostics, candidateProbes, candidateProbes2, candidateProbes3 } = 
 const { loadWikiSeries } = require('./wiki');
 const { ledgerSummary, loadBacktestData } = require('./research');
 const { loadPrices } = require('./prices');
+const { exportLab } = require('./export');
 
 const STALE_AFTER_MIN = 90; // the collector runs every 30 minutes
 const EXPECTED_INTERVAL_MIN = 30;
@@ -140,6 +141,11 @@ function raveRouter(pool) {
   router.get('/diagnostics', wrap(async (req, res) => {
     const results = await runDiagnostics(req.query.candidates === '3' ? candidateProbes3() : req.query.candidates === '2' ? candidateProbes2() : req.query.candidates ? candidateProbes() : []);
     res.json({ at: new Date().toISOString(), results });
+  }));
+
+  // Raw research data for offline analysis, version 2: bars, page views, results dates and news per stock, in pages
+  router.get('/export/lab', wrap(async (req, res) => {
+    res.json(await exportLab(pool, { offset: Math.max(parseInt(req.query.offset, 10) || 0, 0), limit: Math.min(Math.max(parseInt(req.query.limit, 10) || 40, 1), 100) }));
   }));
 
   // Raw research data for offline analysis: Wikipedia daily views and daily prices per stock, in pages of `limit` stocks

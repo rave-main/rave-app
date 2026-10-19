@@ -66,3 +66,30 @@ test('no matching articles is not an error, and a source that keeps failing fail
   await seedHistory(pool, { GME: simulateCounts({ days: 2, level: 30, seed: 1 }) });
   await assert.rejects(news.runNews(pool, { fetchImpl: async () => { throw new Error('connection reset'); }, gapMs: 1 }), /GDELT news failing/);
 });
+
+test('the research export gives bars, page views, results dates and news per stock, paged', async () => {
+  const { exportLab } = require('../src/rave/export');
+  const prices = require('../src/rave/prices');
+  const wiki = require('../src/rave/wiki');
+  await resetRave(pool);
+  await pool.query('DELETE FROM universe');
+  await seedHistory(pool, { AAA: simulateCounts({ days: 2, level: 30, seed: 1 }) });
+  const rows = Array.from({ length: 300 }, (_, i) => ({ day: new Date(Date.UTC(2025, 0, 1) + i * 86400000).toISOString().slice(0, 10), open: 10 + i * 0.5, close: 10.25 + i * 0.5, volume: 1000 + i }));
+  await prices.savePrices(pool, 'AAA', rows);
+  await prices.savePrices(pool, 'SPY', rows);
+  await pool.query(`INSERT INTO wiki_pages (ticker, article, status, confidence, source) VALUES ('AAA', 'Triple A', 'resolved', 'high', 'auto')`);
+  await wiki.saveViews(pool, 'Triple A', rows.slice(0, 100).map((r, i) => ({ day: r.day, views: 100 + i })));
+  await pool.query(`INSERT INTO earnings_dates (ticker, day) VALUES ('AAA', '2025-02-01')`);
+  await pool.query(`INSERT INTO news_months (ticker, month, tone, vol) VALUES ('AAA', '2025-01-01', $1, $2)`, [Array(31).fill(-1), Array(31).fill(0.002)]);
+  const out = await exportLab(pool, { offset: 0, limit: 10 });
+  assert.equal(out.total, 1);
+  const a = out.stocks[0];
+  assert.equal(a.bars.days.length, 300);
+  assert.equal(a.bars.close[1], 10.75);
+  assert.equal(a.viewsStart, '2025-01-01');
+  assert.equal(a.views.length, 100);
+  assert.deepEqual(a.earnings, ['2025-02-01']);
+  assert.equal(a.news.tone.length, 31);
+  assert.equal(out.spy.days.length, 300);
+  assert.equal((await exportLab(pool, { offset: 1, limit: 10 })).stocks.length, 0);
+});
