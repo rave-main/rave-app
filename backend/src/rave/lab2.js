@@ -201,15 +201,15 @@ function stockRows(stock, spy, { horizons = [20, 60], from = 250 } = {}) {
     if (w && w.values.length) {
       const k = day - w.start;
       const prior = [];
-      for (let q = k - 28; q < k; q++) if (q >= 0 && q < w.values.length && w.values[q] != null) prior.push(Math.log1p(w.values[q]));
-      if (prior.length >= 20 && k < w.values.length && w.values[k] != null) {
+      for (let q = k - 28; q < k; q++) if (q >= 0 && q < w.values.length && Number.isFinite(w.values[q])) prior.push(Math.log1p(w.values[q]));
+      if (prior.length >= 20 && k < w.values.length && Number.isFinite(w.values[k])) {
         const med = median(prior);
         const mad = 1.4826 * median(prior.map((x) => Math.abs(x - med)));
         f.wz = (Math.log1p(w.values[k]) - med) / Math.max(mad, 0.05);
-        const last7 = []; for (let q = k - 6; q <= k; q++) if (q >= 0 && w.values[q] != null) last7.push(w.values[q]);
+        const last7 = []; for (let q = k - 6; q <= k; q++) if (q >= 0 && Number.isFinite(w.values[q])) last7.push(w.values[q]);
         f.wl7 = last7.length >= 5 ? Math.log1p(last7.reduce((a, b) => a + b, 0) / last7.length) - med : NaN;
-        const m28 = []; for (let q = k - 27; q <= k; q++) if (q >= 0 && w.values[q] != null) m28.push(w.values[q]);
-        const old = []; for (let q = k - 87; q <= k - 60; q++) if (q >= 0 && w.values[q] != null) old.push(w.values[q]);
+        const m28 = []; for (let q = k - 27; q <= k; q++) if (q >= 0 && Number.isFinite(w.values[q])) m28.push(w.values[q]);
+        const old = []; for (let q = k - 87; q <= k - 60; q++) if (q >= 0 && Number.isFinite(w.values[q])) old.push(w.values[q]);
         f.wtrend = m28.length >= 20 && old.length >= 20 ? Math.log1p(m28.reduce((a, b) => a + b, 0) / m28.length) - Math.log1p(old.reduce((a, b) => a + b, 0) / old.length) : NaN;
         f.wlevel = med;
       }
@@ -250,53 +250,70 @@ function buildPanel(stocks, spyBars, opts = {}) {
   for (const s of stocks) rows.push(...stockRows(s, spy, opts));
   return rows;
 }
+// Rows are kept as columns of 32-bit numbers (a panel of 250,000 weekly rows then takes about 40 MB instead of several hundred)
+class Panel {
+  constructor() { this.n = 0; this.cap = 4096; this.cols = new Map(); this.tickers = new Set(); }
+  grow() {
+    this.cap *= 2;
+    for (const [k, a] of this.cols) { const b = new Float32Array(this.cap).fill(NaN); b.set(a); this.cols.set(k, b); }
+  }
+  push(row) {
+    if (this.n >= this.cap) this.grow();
+    this.tickers.add(row.ticker);
+    for (const k in row) {
+      if (k === 'ticker') continue;
+      let a = this.cols.get(k);
+      if (!a) { a = new Float32Array(this.cap).fill(NaN); this.cols.set(k, a); }
+      a[this.n] = row[k];
+    }
+    this.n++;
+  }
+  col(name) { const a = this.cols.get(name); return a ? a.subarray(0, this.n) : new Float32Array(this.n).fill(NaN); }
+}
+
 // The same, but lets the server answer requests every few stocks (the full universe takes tens of seconds)
 async function buildPanelAsync(stocks, spyBars, opts = {}) {
-  const rows = [];
+  const panel = new Panel();
   const chunk = 40;
   for (let i = 0; i < stocks.length; i += chunk) {
-    for (const r of buildPanel(stocks.slice(i, i + chunk), spyBars, opts)) rows.push(r);
+    for (const r of buildPanel(stocks.slice(i, i + chunk), spyBars, opts)) panel.push(r);
     await new Promise((r) => setImmediate(r));
   }
-  return rows;
+  return panel;
 }
 
 // ---------- walk-forward ----------
-// Columns are built once per panel and reused by every fold and model
-const colCache = new WeakMap();
-function col(rows, name) {
-  let m = colCache.get(rows);
-  if (!m) { m = new Map(); colCache.set(rows, m); }
-  if (!m.has(name)) m.set(name, Float64Array.from(rows, (r) => (r[name] === undefined ? NaN : r[name])));
-  return m.get(name);
-}
-
-function walkForward(rows, H, bigCols, dirCols, { startWeek, stepWeeks = 13, embargoWeeks, C = 0.3, minTrain = 3000, maxTrain = 60000 } = {}) {
+function walkForward(panel, H, bigCols, dirCols, { startWeek, stepWeeks = 13, embargoWeeks, C = 0.3, minTrain = 3000, maxTrain = 60000 } = {}) {
   const embargo = embargoWeeks ?? Math.ceil((H * 1.5) / 5);
-  const weeks = rows.map((r) => r.week);
+  const week = panel.col('week'), R = panel.col(`R${H}`), z = panel.col(`z${H}`), mom = panel.col('mom12_1'), vol60 = panel.col('vol60');
   let last = -Infinity;
-  for (const w of weeks) if (w > last) last = w; // (Math.max(...weeks) overflows the call stack on a big panel)
+  for (let i = 0; i < panel.n; i++) if (week[i] > last) last = week[i];
+  const isBig = (i) => Math.abs(z[i]) >= BIG;
   const out = [];
   for (let a = startWeek; a < last; a += stepWeeks) {
     const trainIdx = [], testIdx = [];
-    rows.forEach((r, i) => { if (!Number.isFinite(r[`R${H}`])) return; if (r.week < a - embargo) trainIdx.push(i); else if (r.week >= a && r.week < a + stepWeeks) testIdx.push(i); });
+    for (let i = 0; i < panel.n; i++) {
+      if (!Number.isFinite(R[i])) continue;
+      if (week[i] < a - embargo) trainIdx.push(i); else if (week[i] >= a && week[i] < a + stepWeeks) testIdx.push(i);
+    }
     if (trainIdx.length < minTrain || testIdx.length < 100) continue;
-    if (trainIdx.length > maxTrain) { const stride = trainIdx.length / maxTrain; const keep = []; for (let q = 0; q < maxTrain; q++) keep.push(trainIdx[Math.floor(q * stride)]); trainIdx.length = 0; trainIdx.push(...keep); }
-    const bigCol = bigCols.map((c) => col(rows, c));
+    if (trainIdx.length > maxTrain) { const stride = trainIdx.length / maxTrain; const keep = []; for (let q = 0; q < maxTrain; q++) keep.push(trainIdx[Math.floor(q * stride)]); trainIdx.length = 0; for (const k of keep) trainIdx.push(k); }
+    const bigCol = bigCols.map((c) => panel.col(c));
     const bigScaler = makeScaler(bigCol.map((c) => trainIdx.map((i) => c[i])));
-    const yBig = Float64Array.from(trainIdx, (i) => (Math.abs(rows[i][`z${H}`]) >= BIG ? 1 : 0));
+    const yBig = Float64Array.from(trainIdx, (i) => (isBig(i) ? 1 : 0));
     const m1 = fitLogistic(applyScaler(bigScaler, bigCol, trainIdx), yBig, { C });
     const pb = predictLogistic(m1, applyScaler(bigScaler, bigCol, testIdx));
     let pu = new Float64Array(testIdx.length).fill(0.5);
     if (dirCols.length) {
-      const bigTrain = trainIdx.filter((i) => Math.abs(rows[i][`z${H}`]) >= BIG);
-      const dirCol = dirCols.map((c) => col(rows, c));
+      const bigTrain = trainIdx.filter(isBig);
+      const dirCol = dirCols.map((c) => panel.col(c));
       const dirScaler = makeScaler(dirCol.map((c) => bigTrain.map((i) => c[i])));
-      const yUp = Float64Array.from(bigTrain, (i) => (rows[i][`R${H}`] > 0 ? 1 : 0));
+      const yUp = Float64Array.from(bigTrain, (i) => (R[i] > 0 ? 1 : 0));
       const m2 = fitLogistic(applyScaler(dirScaler, dirCol, bigTrain), yUp, { C });
       pu = predictLogistic(m2, applyScaler(dirScaler, dirCol, testIdx));
     }
-    testIdx.forEach((i, k) => out.push({ ...rows[i], pb: pb[k], pu: pu[k], big: Math.abs(rows[i][`z${H}`]) >= BIG ? 1 : 0, up: rows[i][`R${H}`] > 0 ? 1 : 0, score: pb[k] * (2 * pu[k] - 1) }));
+    // only what the reports need is kept for each test row
+    testIdx.forEach((i, k) => out.push({ week: week[i], [`R${H}`]: R[i], mom12_1: mom[i], vol60: vol60[i], pb: pb[k], pu: pu[k], big: isBig(i) ? 1 : 0, up: R[i] > 0 ? 1 : 0, score: pb[k] * (2 * pu[k] - 1) }));
   }
   return out;
 }
@@ -372,15 +389,15 @@ const stage2Report = (res) => {
 // spyBars: { days, open, close }. All days are day numbers since 1970-01-01.
 async function runLab2({ stocks, spy, horizons = [20, 60], startWeek, B = 400, sets } = {}) {
   const rows = await buildPanelAsync(stocks, spy, { horizons });
-  if (rows.length < 5000) return { status: 'insufficient', reason: `only ${rows.length} weekly observations` };
-  const weeksSorted = [...new Set(rows.map((r) => r.week))].sort((a, b) => a - b);
+  if (rows.n < 5000) return { status: 'insufficient', reason: `only ${rows.n} weekly observations` };
+  const weeksSorted = [...new Set(rows.col('week'))].sort((a, b) => a - b);
   const first = startWeek ?? weeksSorted[Math.floor(weeksSorted.length * 0.4)]; // the first 40% of the history is training only
   const configs = sets || [
     { id: 'price', label: 'Prices and volume only', big: FEATURES.price, dir: DIRECTION.filter((c) => FEATURES.price.includes(c)) },
     { id: 'earn', label: '+ results-day estimate', big: [...FEATURES.price, ...FEATURES.earn], dir: DIRECTION.filter((c) => FEATURES.price.includes(c) || c === 'earn_react') },
     { id: 'wiki', label: '+ Wikipedia attention', big: [...FEATURES.price, ...FEATURES.earn, ...FEATURES.wiki], dir: DIRECTION.filter((c) => !c.startsWith('n')) },
   ];
-  const out = { status: 'ok', generatedAt: new Date().toISOString(), observations: rows.length, stocks: new Set(rows.map((r) => r.ticker)).size, firstTestWeek: first, horizons: {} };
+  const out = { status: 'ok', generatedAt: new Date().toISOString(), observations: rows.n, stocks: rows.tickers.size, firstTestWeek: first, horizons: {} };
   for (const H of horizons) {
     const entry = { H, models: [], baselines: [] };
     for (const cfg of configs) {

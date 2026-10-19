@@ -1,8 +1,30 @@
 // Loads the research universe from the database in the shape the long-horizon lab (lab2.js) wants, runs it and stores the result.
 const { loadBars, dayNum } = require('./prices');
-const { loadWikiSeries } = require('./wiki');
 const { loadNews } = require('./news');
 const { runLab2 } = require('./lab2');
+
+// Wikipedia views as one dense 32-bit array per article (day number of the first value, then one value per calendar day; NaN where missing).
+// The generic loader makes an object per day, which for 1,500 stocks over six years is several hundred megabytes.
+async function loadViews(pool, articles, { days = 2400 } = {}) {
+  const out = new Map();
+  if (!articles.length) return out;
+  const from = new Date(Date.now() - days * 86400000).toISOString().slice(0, 7) + '-01';
+  const { rows } = await pool.query('SELECT article, month::text AS month, views FROM wiki_months WHERE article = ANY($1) AND month >= $2 ORDER BY article, month', [articles, from]);
+  const byArticle = new Map();
+  for (const r of rows) { if (!byArticle.has(r.article)) byArticle.set(r.article, []); byArticle.get(r.article).push(r); }
+  for (const [article, months] of byArticle) {
+    const start = dayNum(months[0].month.slice(0, 7) + '-01');
+    const lastMonth = months[months.length - 1];
+    const end = dayNum(lastMonth.month.slice(0, 7) + '-01') + lastMonth.views.length - 1;
+    const values = new Float32Array(end - start + 1).fill(NaN);
+    for (const m of months) {
+      const base = dayNum(m.month.slice(0, 7) + '-01') - start;
+      m.views.forEach((v, i) => { if (v !== null) values[base + i] = v; });
+    }
+    out.set(article, { start, values });
+  }
+  return out;
+}
 
 const MIN_SESSIONS = 350; // a year of history for the features plus some to test on
 
@@ -14,7 +36,7 @@ async function loadLab2Data(pool) {
   const bars = await loadBars(pool, [...tickers, 'SPY']);
   const spyBars = bars.get('SPY');
   if (!spyBars) return { stocks: [], spy: null, coverage: { members: members.length, withPrices: 0 } };
-  const views = await loadWikiSeries(pool, [...new Set(tickers.map((t) => article.get(t)).filter(Boolean))], { days: 2400 });
+  const views = await loadViews(pool, [...new Set(tickers.map((t) => article.get(t)).filter(Boolean))], { days: 2400 });
   const news = await loadNews(pool, tickers);
   const stocks = [];
   let removedTotal = 0, removedWithPrices = 0;
@@ -23,14 +45,7 @@ async function loadLab2Data(pool) {
     if (!m.active) removedTotal++;
     if (!b || b.days.length < MIN_SESSIONS) continue;
     if (!m.active) removedWithPrices++;
-    const pts = article.has(m.ticker) ? views.get(article.get(m.ticker)) || [] : [];
-    let v = null;
-    if (pts.length) {
-      const start = Math.round(pts[0].t / 86400000);
-      const values = Array(Math.round((pts[pts.length - 1].t - pts[0].t) / 86400000) + 1).fill(null);
-      for (const p of pts) values[Math.round((p.t - pts[0].t) / 86400000)] = p.mentions;
-      v = { start, values };
-    }
+    const v = article.has(m.ticker) ? views.get(article.get(m.ticker)) || null : null;
     const nw = news.get(m.ticker) || [];
     stocks.push({
       ticker: m.ticker, addedDay: m.added ? dayNum(m.added) : null, removedDay: m.removed ? dayNum(m.removed) : null, bars: b, views: v,
@@ -52,7 +67,7 @@ async function runLab2Job(pool, { log = console, B = 300, horizons = [20, 60] } 
   result.coverage = coverage;
   result.seconds = Math.round((Date.now() - started) / 1000);
   await pool.query(`INSERT INTO validation_runs (kind, params, results) VALUES ('lab2', $1, $2)`, [JSON.stringify({ horizons, B }), JSON.stringify(result)]);
-  return { status: result.status, stocks: stocks.length, observations: result.observations, seconds: result.seconds };
+  return { status: result.status, stocks: stocks.length, observations: result.observations, seconds: result.seconds, memoryMb: Math.round(process.memoryUsage().rss / 1e6) };
 }
 
 module.exports = { loadLab2Data, runLab2Job };
