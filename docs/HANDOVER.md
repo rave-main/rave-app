@@ -1,8 +1,16 @@
 # RAVE handover: read this first
 
-For a new Claude session (or person) picking this up. Last updated 2026-10-18.
+For a new Claude session (or person) picking this up. Last updated 2026-10-19.
 
 **Next steps are in [TODO.md](TODO.md).**
+
+## STATUS AT WIND-DOWN (2026-10-19)
+The project was paused here on purpose. Everything is committed and on `main` (and the working branch `claude/loving-fermi-cq6r5e`); nothing is half-done.
+- **Built and working:** Reddit and Wikipedia collection, S&P 1500 point-in-time universe, 5-year compact prices, earnings dates, Radar with typical 20-day swing, "ran" flag and size idea, per-stock chance of a big move with calibration, long-horizon lab (`lab2.js`), forward ledgers.
+- **Research verdict:** no reliable money-making edge found. Big moves in size can be ranked (test AUC about 0.67 at 4 weeks and 0.71 at 12 weeks) but a single volatility number does the same; direction is near chance once survivorship bias is removed (test AUC 0.53 at 4 weeks); price-based signals (reversal, momentum, 52-week high, low volatility, volatility-gated reversal) all fail a stop rule of about 0.55 AUC and positive net return. See `WORKLOG.md` (2026-10-19 entries), `METHODOLOGY.md` (lab section) and the literature summary (`Predictors of stock return direction.md`, kept outside the repo: ask for it to be regenerated if lost).
+- **Not tried (would need new data):** FINRA short interest, SEC Form 4 insider buys, a better free news source than GDELT, S&P 500 leavers (Wikipedia no longer lists them), real historical earnings dates.
+- **Forward ledgers** (Reddit and Wikipedia, frozen rules) are the only unbiased test of attention; they only grow while collection runs. Reddit attention features cannot enter the lab until weeks of ApeWisdom history exist.
+- **To resume:** read this file, `TODO.md` and `WORKLOG.md`; start Postgres for tests (see "How to run and test"); check `GET /api/rave/sources` for job health; the Railway trial ends about 17 Nov 2026, after which collection stops unless the Hobby plan is taken.
 
 ## What RAVE is
 **RAVE = Retail Attention Volatility Engine.** It tracks how much small investors talk about every US stock on Reddit
