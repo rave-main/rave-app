@@ -293,17 +293,27 @@ function Lab2({ lab }) {
         <p>{winners.length ? `${winners.map((w) => w.label).join('; ')} made money after costs, in every year, with a range that stays above zero. Check it in the forward test before trusting it.` : 'None had a plausible range that stayed above zero after costs, in every year. The Wikipedia, results-date and news inputs are shown so you can see what each adds.'}</p>
       </div>
       <h3>Step 1: can big shifts be spotted?</h3>
+      <p className="muted">All scores are <strong>test scores</strong> (AUC): every quarter the model is trained on earlier weeks only, with a gap before the test quarter, then scored on the quarter it has never seen. 0.5 is chance and 1 is perfect. Two meanings of "big" are tested.</p>
       <div className="table-wrap"><table className="runs">
-        <thead><tr><th>Inputs</th><th className="num" title="0.5 means no better than chance, 1 means perfect">Score (0.5 = chance)</th><th className="num" title="How many times more often a big shift happens among the tenth of stocks the model rates most likely">Big shifts in its top tenth</th><th className="num">Weeks tested</th></tr></thead>
-        <tbody>{e.models.map((m) => <tr key={m.id}><td>{m.label}</td><td className="num">{fx(m.stage1.auc)}</td><td className="num">{m.stage1.lift ? `${m.stage1.lift.toFixed(2)}× as often` : '—'}</td><td className="num">{m.stage1.n.toLocaleString('en-US')}</td></tr>)}</tbody>
+        <thead><tr><th>Question</th><th>Inputs</th><th className="num" title="Test AUC: 0.5 means no better than chance, 1 means perfect">Test score (0.5 = chance)</th><th className="num" title="Average of the separate quarterly test scores">Average quarter</th><th className="num" title="How many times more often it happens among the tenth of rows the model rates most likely">Top tenth hit rate</th><th className="num">Happens in</th></tr></thead>
+        <tbody>
+          {e.models.slice(0, 1).map((m) => m.stage1.size && (
+            <tr key={`${m.id}-size`}><td>Price moves by at least {Math.round(m.stage1.size.threshold * 100)}% (up or down) in {HORIZON_NAME[h]}</td><td>{m.label}</td><td className="num">{fx(m.stage1.size.auc)}</td><td className="num">{fx(m.stage1.size.quarterAuc)}</td><td className="num">{m.stage1.size.lift ? `${m.stage1.size.lift.toFixed(2)}× as often` : '—'}</td><td className="num">{pcs(m.stage1.size.base, 0).replace('+', '')} of weeks</td></tr>
+          ))}
+          {e.models.slice(0, 1).map((m) => m.stage1.size && (
+            <tr key={`${m.id}-vol`} className="baseline"><td>Same question, using only the share's volatility over 120 days</td><td>One number</td><td className="num">{fx(m.stage1.size.volatilityOnlyAuc)}</td><td className="num">—</td><td className="num">—</td><td className="num">—</td></tr>
+          ))}
+          {e.models.map((m) => <tr key={`${m.id}-rel`}><td>Price moves at least twice as much as is usual for that share in {HORIZON_NAME[h]}</td><td>{m.label}</td><td className="num">{fx(m.stage1.auc)}</td><td className="num">{fx(m.stage1.quarterAuc)}</td><td className="num">{m.stage1.lift ? `${m.stage1.lift.toFixed(2)}× as often` : '—'}</td><td className="num">{pcs(m.stage1.base, 0).replace('+', '')} of weeks</td></tr>)}
+        </tbody>
       </table></div>
+      <p className="muted">Reading it: "moves by at least X%" is easy to rank above 0.70, but the volatility-only row shows that is almost entirely "jumpy shares move more", which the model does not improve on. "Twice as much as usual for that share" removes that and is much harder: volatility alone scores below chance on it and the model reaches about 0.62 to 0.65.</p>
       {e.calibration?.length > 0 && (
-        <Explain title="Is the chance of a big shift honest? (calibration)">
+        <Explain title="Is the chance of a big move honest? (calibration)">
           <div className="table-wrap"><table className="runs">
-            <thead><tr><th>Group of weeks and stocks (lowest to highest predicted chance)</th><th className="num">Predicted chance</th><th className="num">Big shift actually happened</th><th className="num">Test rows</th></tr></thead>
+            <thead><tr><th>Group of weeks and stocks (lowest to highest predicted chance)</th><th className="num">Predicted chance</th><th className="num">Move actually happened</th><th className="num">Test rows</th></tr></thead>
             <tbody>{e.calibration.map((c, i) => <tr key={i}><td>{i + 1} of {e.calibration.length}</td><td className="num">{pcs(c.predicted, 0).replace('+', '')}</td><td className="num">{pcs(c.actual, 0).replace('+', '')}</td><td className="num">{c.n.toLocaleString('en-US')}</td></tr>)}</tbody>
           </table></div>
-          <p>Test rows are sorted by the model's predicted chance of a big shift and cut into ten equal groups. If the two percentages are close, the number shown on each stock page can be read as a real probability. These are walk-forward test rows only, never used for training.</p>
+          <p>Test rows are sorted by the model's predicted chance of a move of at least the size above and cut into ten equal groups. If the two percentages are close, the number on each stock page can be read as a probability. These are test rows only, never used for training. The middle groups are slightly under-confident because recent months were more volatile than the years the model learned from.</p>
         </Explain>
       )}
       <h3>Step 2: when there is a big shift, can the direction be called?</h3>

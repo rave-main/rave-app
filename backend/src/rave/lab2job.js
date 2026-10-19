@@ -1,7 +1,7 @@
 // Loads the research universe from the database in the shape the long-horizon lab (lab2.js) wants, runs it and stores the result.
 const { loadBars, dayNum } = require('./prices');
 const { loadNews } = require('./news');
-const { runLab2, fitBigMove, scoreBigMove, stockRows, prepareSpy } = require('./lab2');
+const { SIZE, runLab2, fitBigMove, scoreBigMove, stockRows, prepareSpy } = require('./lab2');
 
 const BIG_MOVE_H = 20; // sessions
 
@@ -75,7 +75,7 @@ async function runLab2Job(pool, { log = console, B = 300, horizons = [20, 60] } 
   return { status: result.status, stocks: stocks.length, observations: result.observations, seconds: result.seconds, memoryMb: Math.round(process.memoryUsage().rss / 1e6) };
 }
 
-// Today's chance that a stock makes a big move (at least 2 times its own typical move over the next 20 sessions, up or down), for every
+// Today's chance that a stock moves by at least 10% (market-adjusted, up or down) over the next 20 sessions, for every
 // stock in the universe and every recently mentioned Reddit stock. Stored with the calibration table so the numbers can be checked.
 async function runBigMove(pool, panel, spyBars, entry, universeStocks) {
   const fit = fitBigMove(panel, BIG_MOVE_H);
@@ -94,7 +94,7 @@ async function runBigMove(pool, panel, spyBars, entry, universeStocks) {
     for (const [ticker, b] of bars) if (b.days.length >= MIN_SESSIONS) score({ ticker, bars: b, addedDay: null, removedDay: null, views: null, news: null });
     await new Promise((r) => setImmediate(r));
   }
-  const results = { asOf, H: BIG_MOVE_H, base: fit.base, trainRows: fit.n, auc: entry?.models?.[0]?.stage1?.auc ?? null, calibration: entry?.calibration || [], scores };
+  const results = { asOf, H: BIG_MOVE_H, base: fit.base, trainRows: fit.n, threshold: SIZE[BIG_MOVE_H], auc: entry?.models?.[0]?.stage1?.size?.auc ?? null, volatilityOnlyAuc: entry?.models?.[0]?.stage1?.size?.volatilityOnlyAuc ?? null, calibration: entry?.calibration || [], scores };
   await pool.query(`INSERT INTO validation_runs (kind, params, results) VALUES ('bigmove', $1, $2)`, [JSON.stringify({ H: BIG_MOVE_H }), JSON.stringify(results)]);
   return Object.keys(scores).length;
 }

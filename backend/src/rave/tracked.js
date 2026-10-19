@@ -130,7 +130,7 @@ async function scoredStocks(pool) {
       spark: merged.slice(-48).map((p) => p.mentions), // about the last 24 hours
       price: priceSummary(prices.get(r.ticker)),
       results: dueOf.get(r.ticker) || null,
-      bigMove: bigMove && bigMove.scores[r.ticker] !== undefined ? { p: bigMove.scores[r.ticker], base: bigMove.base, asOf: bigMove.asOf, days: bigMove.H, auc: bigMove.auc } : null,
+      bigMove: bigMove && bigMove.scores[r.ticker] !== undefined ? { p: bigMove.scores[r.ticker], base: bigMove.base, asOf: bigMove.asOf, days: bigMove.H, threshold: bigMove.threshold, auc: bigMove.auc, volatilityOnlyAuc: bigMove.volatilityOnlyAuc } : null,
       scores,
       wiki: m ? { article: m.article, status: m.status, confidence: m.confidence, source: m.source, scores: wikiScores, views } : { article: null, status: 'pending', confidence: 'none', source: 'auto', scores: null },
       // both signals agree when Reddit and Wikipedia are each at Rising or above (short horizon)

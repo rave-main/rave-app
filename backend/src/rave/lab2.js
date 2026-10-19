@@ -21,6 +21,7 @@ const FEATURES = {
 const DIRECTION = ['mom12_1', 'ret60', 'ret120', 'hi52', 'lo52', 'ret5', 'ret20', 'earn_react', 'wz', 'wl7', 'wtrend', 'ntone', 'ntonechg', 'spy20'];
 const COST = 0.0032; // 0.3% to trade a share and 0.02% for the market hedge, per leg per round trip
 const BORROW = 0.05; // a year, to borrow shares for the short leg
+const SIZE = { 20: 0.1, 60: 0.2 }; // second definition of a big move: the market-adjusted price changes by at least this much (a fraction), whatever the stock's usual size
 const BIG = 2; // a shift counts as big when it is at least this many times the stock's own typical move over the horizon
 
 // ---------- small numerical tools ----------
@@ -289,7 +290,7 @@ async function buildPanelAsync(stocks, spyBars, opts = {}) {
 // ---------- walk-forward ----------
 function walkForward(panel, H, bigCols, dirCols, { startWeek, stepWeeks = 13, embargoWeeks, C = 0.3, minTrain = 3000, maxTrain = 60000 } = {}) {
   const embargo = embargoWeeks ?? Math.ceil((H * 1.5) / 5);
-  const week = panel.col('week'), R = panel.col(`R${H}`), z = panel.col(`z${H}`), mom = panel.col('mom12_1'), vol60 = panel.col('vol60');
+  const week = panel.col('week'), R = panel.col(`R${H}`), z = panel.col(`z${H}`), mom = panel.col('mom12_1'), vol60 = panel.col('vol60'), vol120 = panel.col('vol120');
   let last = -Infinity;
   for (let i = 0; i < panel.n; i++) if (week[i] > last) last = week[i];
   const isBig = (i) => Math.abs(z[i]) >= BIG;
@@ -307,6 +308,9 @@ function walkForward(panel, H, bigCols, dirCols, { startWeek, stepWeeks = 13, em
     const yBig = Float64Array.from(trainIdx, (i) => (isBig(i) ? 1 : 0));
     const m1 = fitLogistic(applyScaler(bigScaler, bigCol, trainIdx), yBig, { C });
     const pb = predictLogistic(m1, applyScaler(bigScaler, bigCol, testIdx));
+    const isSize = (i) => Math.abs(R[i]) >= SIZE[H];
+    const m3 = fitLogistic(applyScaler(bigScaler, bigCol, trainIdx), Float64Array.from(trainIdx, (i) => (isSize(i) ? 1 : 0)), { C });
+    const ps = predictLogistic(m3, applyScaler(bigScaler, bigCol, testIdx));
     let pu = new Float64Array(testIdx.length).fill(0.5);
     if (dirCols.length) {
       const bigTrain = trainIdx.filter(isBig);
@@ -317,7 +321,7 @@ function walkForward(panel, H, bigCols, dirCols, { startWeek, stepWeeks = 13, em
       pu = predictLogistic(m2, applyScaler(dirScaler, dirCol, testIdx));
     }
     // only what the reports need is kept for each test row
-    testIdx.forEach((i, k) => out.push({ week: week[i], [`R${H}`]: R[i], mom12_1: mom[i], vol60: vol60[i], pb: pb[k], pu: pu[k], big: isBig(i) ? 1 : 0, up: R[i] > 0 ? 1 : 0, score: pb[k] * (2 * pu[k] - 1) }));
+    testIdx.forEach((i, k) => out.push({ week: week[i], [`R${H}`]: R[i], mom12_1: mom[i], vol60: vol60[i], vol120: vol120[i], ps: ps[k], size: isSize(i) ? 1 : 0, pb: pb[k], pu: pu[k], big: isBig(i) ? 1 : 0, up: R[i] > 0 ? 1 : 0, score: pb[k] * (2 * pu[k] - 1) }));
   }
   return out;
 }
@@ -373,20 +377,37 @@ function evaluate(res, scoreOf, H, { q = 0.1, B = 400, seed = 7 } = {}) {
   };
 }
 
-const stage1Report = (res) => {
-  const y = Float64Array.from(res, (r) => r.big), s = Float64Array.from(res, (r) => r.pb);
-  const base = mean(Array.from(y));
-  const cut = quantileSorted(sorted(s), 0.9);
-  const top = res.filter((r) => r.pb >= cut);
-  return { n: res.length, base, auc: auc(y, s), lift: top.length ? mean(top.map((r) => r.big)) / base : null };
+// Every number here comes from the test rows only (each fold is scored by a model trained on earlier weeks, with an embargo); nothing is scored on rows it was trained on.
+const quarterMeanAuc = (res, label, score) => {
+  const by = new Map();
+  for (const r of res) { const q = Math.floor(r.week / 13); if (!by.has(q)) by.set(q, []); by.get(q).push(r); }
+  const a = [...by.values()].map((g) => auc(Float64Array.from(g, label), Float64Array.from(g, score))).filter((x) => x !== null);
+  return mean(a);
 };
+const topLift = (res, label, score) => {
+  const cut = quantileSorted(sorted(Float64Array.from(res, score)), 0.9);
+  const top = res.filter((r) => score(r) >= cut);
+  const base = mean(res.map(label));
+  return top.length && base > 0 ? mean(top.map(label)) / base : null;
+};
+const stage1Report = (res, H) => {
+  const rel = (r) => r.big, sz = (r) => r.size;
+  return {
+    n: res.length, base: mean(res.map(rel)), auc: auc(Float64Array.from(res, rel), Float64Array.from(res, (r) => r.pb)), lift: topLift(res, rel, (r) => r.pb), quarterAuc: quarterMeanAuc(res, rel, (r) => r.pb),
+    size: {
+      threshold: SIZE[H], base: mean(res.map(sz)), auc: auc(Float64Array.from(res, sz), Float64Array.from(res, (r) => r.ps)), lift: topLift(res, sz, (r) => r.ps), quarterAuc: quarterMeanAuc(res, sz, (r) => r.ps),
+      volatilityOnlyAuc: auc(Float64Array.from(res, sz), Float64Array.from(res, (r) => r.vol120)), // the benchmark: a single number, the stock's own volatility over 120 sessions
+    },
+  };
+};
+
 // Reliability of the big-shift probability: ten equal groups of test rows by predicted chance, with the share that really had a big shift
 function calibration(res) {
-  const order = Array.from({ length: res.length }, (_, i) => i).sort((a, b) => res[a].pb - res[b].pb);
+  const order = Array.from({ length: res.length }, (_, i) => i).sort((a, b) => res[a].ps - res[b].ps);
   const groups = [];
   for (let g = 0; g < 10; g++) {
     const part = order.slice(Math.floor((g * order.length) / 10), Math.floor(((g + 1) * order.length) / 10));
-    if (part.length) groups.push({ predicted: mean(part.map((i) => res[i].pb)), actual: mean(part.map((i) => res[i].big)), n: part.length });
+    if (part.length) groups.push({ predicted: mean(part.map((i) => res[i].ps)), actual: mean(part.map((i) => res[i].size)), n: part.length });
   }
   return groups;
 }
@@ -419,7 +440,7 @@ async function runLab2({ stocks, spy, horizons = [20, 60], startWeek, B = 400, s
       const res = walkForward(rows, H, cfg.big, cfg.dir, { startWeek: first });
       if (!res.length) continue;
       if (cfg === configs[0]) entry.calibration = calibration(res);
-      entry.models.push({ id: cfg.id, label: cfg.label, stage1: stage1Report(res), stage2: stage2Report(res), all: evaluate(res, (r) => r.score, H, { B }), directionOnly: evaluate(res, (r) => r.pu - 0.5, H, { B }) });
+      entry.models.push({ id: cfg.id, label: cfg.label, stage1: stage1Report(res, H), stage2: stage2Report(res), all: evaluate(res, (r) => r.score, H, { B }), directionOnly: evaluate(res, (r) => r.pu - 0.5, H, { B }) });
       if (cfg === configs[0]) entry.res = res;
     }
     const res = entry.res;
@@ -447,13 +468,13 @@ async function runLab2({ stocks, spy, horizons = [20, 60], startWeek, B = 400, s
 // ---------- today's chance of a big move ----------
 // Fits the stage 1 model (price and volume features only) on every labelled row and scores stocks as they are today. H is in sessions.
 function fitBigMove(panel, H, { cols = FEATURES.price, maxTrain = 80000, C = 0.3 } = {}) {
-  const R = panel.col(`R${H}`), z = panel.col(`z${H}`);
+  const R = panel.col(`R${H}`);
   const idx = [];
-  for (let i = 0; i < panel.n; i++) if (Number.isFinite(R[i]) && Number.isFinite(z[i])) idx.push(i);
+  for (let i = 0; i < panel.n; i++) if (Number.isFinite(R[i])) idx.push(i);
   if (idx.length > maxTrain) { const stride = idx.length / maxTrain; const keep = []; for (let q = 0; q < maxTrain; q++) keep.push(idx[Math.floor(q * stride)]); idx.length = 0; for (const k of keep) idx.push(k); }
   const columns = cols.map((c) => panel.col(c));
   const scaler = makeScaler(columns.map((c) => idx.map((i) => c[i])));
-  const y = Float64Array.from(idx, (i) => (Math.abs(z[i]) >= BIG ? 1 : 0));
+  const y = Float64Array.from(idx, (i) => (Math.abs(R[i]) >= SIZE[H] ? 1 : 0));
   const model = fitLogistic(applyScaler(scaler, columns, idx), y, { C });
   let base = 0; for (const v of y) base += v;
   return { cols, scaler, model, base: base / y.length, n: idx.length };
@@ -463,4 +484,4 @@ function scoreBigMove(fit, row) {
   return predictLogistic(fit.model, applyScaler(fit.scaler, columns, [0]))[0];
 }
 
-module.exports = { prepareSpy, fitBigMove, scoreBigMove, runLab2, buildPanel, buildPanelAsync, stockRows, walkForward, portfolio, evaluate, fitLogistic, predictLogistic, auc, earningsFlags, weekOf, FEATURES, DIRECTION, COST };
+module.exports = { SIZE, prepareSpy, fitBigMove, scoreBigMove, runLab2, buildPanel, buildPanelAsync, stockRows, walkForward, portfolio, evaluate, fitLogistic, predictLogistic, auc, earningsFlags, weekOf, FEATURES, DIRECTION, COST };
