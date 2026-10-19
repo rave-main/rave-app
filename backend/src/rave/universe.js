@@ -62,7 +62,8 @@ function parseChanges(html) {
     if (!/added/.test(head) || !/removed/.test(head)) continue;
     let day = null;
     for (const tr of table.split(/<tr\b/i).slice(1)) {
-      const cells = [...tr.matchAll(/<td\b[^>]*>([\s\S]*?)<\/td>/gi)].map((m) => strip(m[1]));
+      // the date cell is a <th> on some pages, so both cell kinds are read
+      const cells = [...tr.matchAll(/<t[dh]\b[^>]*>([\s\S]*?)<\/t[dh]>/gi)].map((m) => strip(m[1]));
       if (cells.length < 4) continue;
       let rest = cells;
       const d = parseDate(cells[0]);

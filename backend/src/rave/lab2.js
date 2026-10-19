@@ -262,7 +262,14 @@ async function buildPanelAsync(stocks, spyBars, opts = {}) {
 }
 
 // ---------- walk-forward ----------
-const col = (rows, name) => Float64Array.from(rows, (r) => (r[name] === undefined ? NaN : r[name]));
+// Columns are built once per panel and reused by every fold and model
+const colCache = new WeakMap();
+function col(rows, name) {
+  let m = colCache.get(rows);
+  if (!m) { m = new Map(); colCache.set(rows, m); }
+  if (!m.has(name)) m.set(name, Float64Array.from(rows, (r) => (r[name] === undefined ? NaN : r[name])));
+  return m.get(name);
+}
 
 function walkForward(rows, H, bigCols, dirCols, { startWeek, stepWeeks = 13, embargoWeeks, C = 0.3, minTrain = 3000, maxTrain = 60000 } = {}) {
   const embargo = embargoWeeks ?? Math.ceil((H * 1.5) / 5);
