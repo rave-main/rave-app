@@ -110,3 +110,16 @@ test('runs left "running" by a process that died are abandoned at boot, so the j
   assert.deepEqual(rows.map((r) => r.status), ['failed', 'running']);
   assert.match(rows[0].error, /restarted/);
 });
+
+test('a run that stopped at its time limit is continued after five minutes even when an earlier run already satisfied the schedule', async () => {
+  await resetRave(pool);
+  const job = { kind: 'cont', label: 'c', times: ['00:00'], staleAfterMs: 1e9 };
+  const now = new Date('2026-10-19T15:30:00Z');
+  await pool.query(`INSERT INTO collection_runs (kind, status, started_at, finished_at, details) VALUES ('cont', 'success', '2026-10-19T04:30:00Z', '2026-10-19T04:35:00Z', '{}')`);
+  assert.equal((await isDue(pool, job, now)).due, false, 'the schedule is satisfied');
+  await pool.query(`INSERT INTO collection_runs (kind, status, started_at, finished_at, details) VALUES ('cont', 'success', '2026-10-19T15:00:00Z', '2026-10-19T15:09:00Z', '{"partial": true}')`);
+  assert.equal((await isDue(pool, job, new Date('2026-10-19T15:11:00Z'))).due, false, 'wait five minutes first');
+  assert.equal((await isDue(pool, job, now)).due, true, 'now it continues');
+  await pool.query(`INSERT INTO collection_runs (kind, status, started_at, finished_at, details) VALUES ('cont', 'success', '2026-10-19T15:31:00Z', '2026-10-19T15:35:00Z', '{"partial": false}')`);
+  assert.equal((await isDue(pool, job, new Date('2026-10-19T16:00:00Z'))).due, false, 'a complete run ends the continuation');
+});

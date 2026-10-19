@@ -55,6 +55,13 @@ async function isDue(pool, job, now = new Date()) {
      FROM collection_runs WHERE kind = $1`,
     [job.kind, mark, now]
   );
+  // A run that stopped at its time limit (a long first backfill) is continued 5 minutes later, whether it was scheduled or started by hand
+  const { rows: [latest] } = await pool.query(
+    `SELECT finished_at, coalesce(details->>'partial', 'false') = 'true' AS partial FROM collection_runs WHERE kind = $1 AND status = 'success' ORDER BY started_at DESC LIMIT 1`, [job.kind]
+  );
+  if (latest?.partial && r.running === 0) {
+    return now.getTime() - new Date(latest.finished_at).getTime() >= CONTINUE_AFTER_MS ? { due: true, reason: 'continuing (the last run stopped at its time limit)', mark } : { due: false, reason: 'continuing shortly', mark };
+  }
   if (r.ok_since > 0) return { due: false, reason: 'already ran for this schedule', mark };
   if (r.running > 0) return { due: false, reason: 'running', mark };
   if (r.last_partial && now.getTime() - new Date(r.last_partial).getTime() < CONTINUE_AFTER_MS) return { due: false, reason: 'continuing shortly (the last run stopped at its time limit)', mark };
