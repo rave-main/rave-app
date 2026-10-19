@@ -165,7 +165,8 @@ function raveRouter(pool) {
   router.get('/research', wrap(async (req, res) => {
     const { rows: [latest] } = await pool.query(`SELECT id, ran_at AS "ranAt", results FROM validation_runs WHERE kind = 'wiki_backtest' ORDER BY ran_at DESC LIMIT 1`);
     const { rows: [lab] } = await pool.query(`SELECT id, ran_at AS "ranAt", results FROM validation_runs WHERE kind = 'strategy_lab' ORDER BY ran_at DESC LIMIT 1`);
-    res.json({ backtest: latest ? { id: latest.id, ranAt: latest.ranAt, ...latest.results } : null, lab: lab ? { id: lab.id, ranAt: lab.ranAt, ...lab.results } : null, ledger: await ledgerSummary(pool, 'reddit'), ledgerWiki: await ledgerSummary(pool, 'wiki') });
+    const { rows: [lab2] } = await pool.query(`SELECT id, ran_at AS "ranAt", results FROM validation_runs WHERE kind = 'lab2' ORDER BY ran_at DESC LIMIT 1`);
+    res.json({ lab2: lab2 ? { id: lab2.id, ranAt: lab2.ranAt, ...lab2.results } : null, backtest: latest ? { id: latest.id, ranAt: latest.ranAt, ...latest.results } : null, lab: lab ? { id: lab.id, ranAt: lab.ranAt, ...lab.results } : null, ledger: await ledgerSummary(pool, 'reddit'), ledgerWiki: await ledgerSummary(pool, 'wiki') });
   }));
 
   // Every scheduled source: cadence, last success, next scheduled run, staleness

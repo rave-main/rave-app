@@ -1,5 +1,5 @@
 import { CartesianGrid, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Explain, dateTime, signedPct, signedUsd, usePoll } from './lib.jsx';
 
@@ -260,12 +260,79 @@ function Rules({ lab }) {
   );
 }
 
+const pcs = (x, d = 2) => (x === null || x === undefined || Number.isNaN(x) ? '—' : `${x >= 0 ? '+' : '−'}${Math.abs(x * 100).toFixed(d)}%`);
+const fx = (x, d = 3) => (x === null || x === undefined || Number.isNaN(x) ? '—' : x.toFixed(d));
+const HORIZON_NAME = { 20: '4 weeks (20 trading days)', 60: '12 weeks (60 trading days)' };
+
+function Lab2({ lab }) {
+  const horizons = Object.keys(lab.horizons);
+  const [h, setH] = useState(horizons[0]);
+  const e = lab.horizons[h];
+  if (!e) return null;
+  const rows = [
+    ...e.models.flatMap((m) => [{ key: `${m.id}-s`, label: `${m.label}: big shifts, then direction`, r: m.all }, { key: `${m.id}-d`, label: `${m.label}: direction only`, r: m.directionOnly }]),
+    ...e.baselines.map((b) => ({ key: b.id, label: b.label, r: b, base: true })),
+  ];
+  const clear = (r) => r.ci && r.ci[0] > 0;
+  const winners = rows.filter((x) => !x.base && clear(x.r) && Object.values(x.r.byYear).filter((y) => y.n >= 2).every((y) => y.mean > 0));
+  return (
+    <section className="card">
+      <h2>Looking over years <small>spot big shifts, then call the direction</small></h2>
+      <p className="lede">
+        Every week, for every company that was in the S&amp;P 500, 400 or 600 at that time, RAVE asks two questions using only what was known that day: will the share move much more than
+        usual over the next 4 or 12 weeks (a big shift, up or down), and if it does, will it be up? The models are retrained every quarter on the past only, so nothing is tested on data it has seen.
+        Companies that left the index are included, so results are not flattered by only looking at survivors.
+      </p>
+      <p className="muted">{lab.stocks.toLocaleString('en-US')} companies, {lab.observations.toLocaleString('en-US')} weekly observations{lab.coverage ? `; ${lab.coverage.removedWithPrices} of ${lab.coverage.removedTotal} companies that left an index have price history` : ''}.</p>
+      <div className="seg" role="tablist" aria-label="Horizon">
+        {horizons.map((k) => <button key={k} className={h === k ? 'on' : ''} onClick={() => setH(k)}>{Number(k) === 20 ? '4 weeks' : '12 weeks'}</button>)}
+      </div>
+      <div className={`verdict-card ${winners.length ? 'tone-good' : 'tone-none'} wide`}>
+        <small>The short answer for {HORIZON_NAME[h]}</small>
+        <strong>{winners.length ? 'Something held up (treat with care)' : 'No version made money reliably'}</strong>
+        <p>{winners.length ? `${winners.map((w) => w.label).join('; ')} made money after costs, in every year, with a range that stays above zero. Check it in the forward test before trusting it.` : 'None had a plausible range that stayed above zero after costs, in every year. The Wikipedia, results-date and news inputs are shown so you can see what each adds.'}</p>
+      </div>
+      <h3>Step 1: can big shifts be spotted?</h3>
+      <div className="table-wrap"><table className="runs">
+        <thead><tr><th>Inputs</th><th className="num" title="0.5 means no better than chance, 1 means perfect">Score (0.5 = chance)</th><th className="num" title="How many times more often a big shift happens among the tenth of stocks the model rates most likely">Big shifts in its top tenth</th><th className="num">Weeks tested</th></tr></thead>
+        <tbody>{e.models.map((m) => <tr key={m.id}><td>{m.label}</td><td className="num">{fx(m.stage1.auc)}</td><td className="num">{m.stage1.lift ? `${m.stage1.lift.toFixed(2)}× as often` : '—'}</td><td className="num">{m.stage1.n.toLocaleString('en-US')}</td></tr>)}</tbody>
+      </table></div>
+      <h3>Step 2: when there is a big shift, can the direction be called?</h3>
+      <div className="table-wrap"><table className="runs">
+        <thead><tr><th>Inputs</th><th className="num">Big shifts</th><th className="num">Went up</th><th className="num" title="0.5 means no better than a coin toss">Score (0.5 = chance)</th><th className="num" title="Average of the quarterly scores, so one market mood cannot flatter it">Typical quarter</th></tr></thead>
+        <tbody>{e.models.map((m) => <tr key={m.id}><td>{m.label}</td><td className="num">{m.stage2.n.toLocaleString('en-US')}</td><td className="num">{pcs(m.stage2.upRate - 0, 0).replace('+', '')}</td><td className="num">{fx(m.stage2.auc)}</td><td className="num">{fx(m.stage2.quarterAuc)}</td></tr>)}</tbody>
+      </table></div>
+      <h3>Step 3: would trading it have made money?</h3>
+      <p className="muted">Buy the tenth of stocks the score likes most and sell short the tenth it likes least, equal amounts, holding for {HORIZON_NAME[h]}; the market is hedged, so only the stock picking counts. Costs {pcs(0.0032, 2).replace('+', '')} to trade and 5% a year to borrow shares for the shorts are taken off.</p>
+      <div className="table-wrap"><table className="runs">
+        <thead><tr><th>Rule</th><th className="num">Average per period, after costs</th><th className="num">Plausible range</th><th className="num">Periods</th><th className="num">Winning periods</th><th className="num">Buy side alone</th></tr></thead>
+        <tbody>{rows.map((x) => (
+          <tr key={x.key} className={x.base ? 'baseline' : ''}>
+            <td>{x.label}</td>
+            <td className={`num ${x.r.lsNet > 0 ? 'up' : 'down'}`}>{pcs(x.r.lsNet)}</td>
+            <td className="num">{x.r.ci ? `${pcs(x.r.ci[0])} to ${pcs(x.r.ci[1])}` : '—'}</td>
+            <td className="num">{x.r.periods}</td>
+            <td className="num">{x.r.hit === null || Number.isNaN(x.r.hit) ? '—' : `${Math.round(x.r.hit * 100)}%`}</td>
+            <td className="num">{pcs(x.r.longNet)}</td>
+          </tr>))}</tbody>
+      </table></div>
+      <Explain title="Results by year">
+        <div className="table-wrap"><table className="runs"><thead><tr><th>Rule</th>{Object.keys(rows[0].r.byYear).map((y) => <th key={y} className="num">{y}</th>)}</tr></thead>
+          <tbody>{rows.map((x) => <tr key={x.key}><td>{x.label}</td>{Object.keys(rows[0].r.byYear).map((y) => <td key={y} className={`num ${x.r.byYear[y]?.mean > 0 ? 'up' : 'down'}`}>{x.r.byYear[y] ? pcs(x.r.byYear[y].mean) : '—'}</td>)}</tr>)}</tbody></table></div>
+        <p>Average result per period in each calendar year (market hedged, costs included). A rule worth trusting is positive in most years, not just in total.</p>
+      </Explain>
+      <p className="foot">The "random scores" line shows what luck and costs alone give; a rule has to beat it clearly. Momentum and "calmest minus jumpiest" are well-known simple rules, shown so you can see whether the attention, results-date and news inputs add anything beyond them. Retrained every quarter; the first 40% of the history is training only.</p>
+    </section>
+  );
+}
+
 export default function Research() {
   const { data, error } = usePoll('/rave/research', 120000);
   if (error && !data) return <p className="banner err">Could not load research — {error.message}</p>;
   if (!data) return <p className="muted">Loading…</p>;
   const b = data.backtest;
   const lab = data.lab?.status === 'ok' ? data.lab : null;
+  const lab2 = data.lab2?.status === 'ok' ? data.lab2 : null;
   const ll = b?.status === 'ok' ? b.leadLag.map((r) => ({ lag: r.lag, size: r.size?.r ?? null, volume: r.volume?.r ?? null })) : [];
 
   return (
@@ -275,6 +342,7 @@ export default function Research() {
         <p className="lede">We ask three questions in turn: what makes share prices swing, whether a swing can be split into up and down, and whether a simple trading rule would have made money. All of it uses Wikipedia page views (people looking up a company) with about two years of share prices.</p>
         {!lab && <p className="muted">The analysis runs twice a day and has not produced results yet.</p>}
       </section>
+      {lab2 && <Lab2 lab={lab2} />}
       {lab && <><Swings lab={lab} /><Direction lab={lab} /><Rules lab={lab} /></>}
 
       <section className="card">

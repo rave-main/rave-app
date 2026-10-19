@@ -6,6 +6,7 @@ const { runPrices } = require('./pricejob');
 const { runUniverse } = require('./universe');
 const { runEarnings } = require('./earnings');
 const { runNews } = require('./news');
+const { runLab2Job } = require('./lab2job');
 const { runResearch, recordSpikes, updateLedger } = require('./research');
 
 function buildJobs() {
@@ -63,6 +64,14 @@ function buildJobs() {
       times: ['12:30', '22:30'],
       staleAfterMs: 30 * 60 * 60 * 1000,
       run: (pool, ctx) => runPrices(pool, ctx),
+    },
+    {
+      kind: 'lab2',
+      label: 'Long-horizon research (big shifts over 4 and 12 weeks)',
+      cadence: 'daily at 04:50 UTC; trains only on the past, retrained every quarter',
+      times: ['04:50'],
+      staleAfterMs: 40 * 60 * 60 * 1000,
+      run: (pool, ctx) => runLab2Job(pool, ctx),
     },
     {
       kind: 'research',
