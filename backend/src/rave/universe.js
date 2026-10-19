@@ -9,6 +9,8 @@ const PAGES = [
   ['sp400', 'List_of_S&P_400_companies'],
   ['sp600', 'List_of_S&P_600_companies'],
 ];
+// Pages that may hold the S&P 500 changes table when the main list page does not (tried in order until one yields changes)
+const CHANGE_PAGES = { sp500: ['List_of_S&P_500_component_changes', 'Changes_to_the_S&P_500', 'S&P_500_index_changes'] };
 const REFRESH_AFTER_DAYS = 6;
 
 const MONTHS = { january: 1, february: 2, march: 3, april: 4, may: 5, june: 6, july: 7, august: 8, september: 9, october: 10, november: 11, december: 12 };
@@ -85,7 +87,11 @@ async function fetchIndex(page, opts = {}) {
   if (typeof html !== 'string') throw new wiki.WikiError(`no table in ${page}`);
   const changes = parseChanges(html);
   // when a page yields no changes, keep a short look at the tables that mention both words so the parser can be fixed from the deployed service
-  const debug = changes.length ? null : html.split(/<table\b/i).slice(1).filter((t) => /removed/i.test(t) && /added/i.test(t)).slice(0, 2).map((t) => t.replace(/\s+/g, ' ').slice(0, 700));
+  const debug = changes.length ? null : {
+    tables: html.split(/<table\b/i).length - 1, length: html.length,
+    headings: [...html.matchAll(/<h[23][^>]*>([\s\S]*?)<\/h[23]>/gi)].map((m) => strip(m[1])).slice(0, 30),
+    candidates: html.split(/<table\b/i).slice(1).filter((t) => /removed/i.test(t) && /added/i.test(t)).slice(0, 2).map((t) => t.replace(/\s+/g, ' ').slice(0, 700)),
+  };
   return { rows: parseIndexTable(html), changes, debug };
 }
 
@@ -146,7 +152,15 @@ async function runUniverse(pool, { log = console, fetchImpl = fetch, now = Date.
       if (rows.length < 100) throw new Error(`only ${rows.length} rows found`);
       details.lists[name] = await saveUniverse(pool, name, rows);
       details.total += details.lists[name];
-      pending.push([name, changes]);
+      let found = changes;
+      for (const alt of changes.length ? [] : CHANGE_PAGES[name] || []) {
+        try {
+          const extra = await fetchIndex(alt, { fetchImpl });
+          (details.debug ||= {})[`${name}:${alt}`] = extra.changes.length ? `${extra.changes.length} changes` : extra.debug;
+          if (extra.changes.length) { found = extra.changes; break; }
+        } catch (err) { (details.debug ||= {})[`${name}:${alt}`] = String(err.message).slice(0, 100); }
+      }
+      pending.push([name, found]);
     } catch (err) {
       details.errors.push(`${name}: ${String(err.message).slice(0, 120)}`);
     }
